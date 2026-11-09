@@ -109,3 +109,16 @@ describe('pickCopy', () => {
     expect(TEMPLATE_COUNT).toBeGreaterThanOrEqual(REMINDER_HORIZON_DAYS);
   });
 });
+
+describe('reminder routes', () => {
+  it('only ever points at routes that exist', () => {
+    // A notification that cannot navigate is worse than no notification: the one
+    // feature the whole app rests on silently does nothing when tapped.
+    const KNOWN_ROUTES = ['/session/today'];
+    for (const dayKey of dayKeysFrom('2026-01-01', 200)) {
+      const { route } = pickCopy(context({ dayKey })).data;
+      const path = route.split('?')[0] ?? route;
+      expect(KNOWN_ROUTES).toContain(path);
+    }
+  });
+});

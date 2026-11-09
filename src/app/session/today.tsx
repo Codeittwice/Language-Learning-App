@@ -6,18 +6,23 @@
  * decision in a route rather than in the notification payload means a reminder
  * scheduled two weeks ago still lands in the right place.
  */
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
 import { getProfile } from '@/db/repo/profile';
 import { startOrResume } from '@/session/engine';
+import type { DurationMode } from '@/types';
 import { useTheme } from '@/theme/use-theme';
 import { Button } from '@/ui/button';
 import { Text } from '@/ui/text';
 
+const MODES: DurationMode[] = ['quick', 'short', 'standard'];
+
 export default function ResolveTodaySession() {
+  // A reminder that promises a quick round must actually open one.
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
   const db = useSQLiteContext();
   const router = useRouter();
   const theme = useTheme();
@@ -28,8 +33,11 @@ export default function ResolveTodaySession() {
 
     (async () => {
       try {
+        const requested = MODES.find((candidate) => candidate === mode);
         const profile = await getProfile(db);
-        const session = await startOrResume(db, { mode: profile.defaultDurationMode });
+        const session = await startOrResume(db, {
+          mode: requested ?? profile.defaultDurationMode,
+        });
         if (cancelled) return;
         router.replace(`/session/${session.id}`);
       } catch (caught) {
@@ -41,7 +49,7 @@ export default function ResolveTodaySession() {
     return () => {
       cancelled = true;
     };
-  }, [db, router]);
+  }, [db, mode, router]);
 
   return (
     <View

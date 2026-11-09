@@ -43,7 +43,8 @@ type Template = {
 };
 
 const TO_SESSION = { route: '/session/today' };
-const TO_QUICK = { route: '/quick/recall' };
+/** A short round. `/session/today` resolves what that means right now. */
+const TO_QUICK = { route: '/session/today?mode=quick' };
 
 const always = () => true;
 

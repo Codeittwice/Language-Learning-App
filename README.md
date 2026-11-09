@@ -75,9 +75,13 @@ app shows token counts and says the cost is unknown.
 
 ## Status
 
-Working: database and migrations, the four AI providers with key validation and model
-selection, the tab shell, design system, and the learning-day/streak foundations.
+Working: the daily practice session (recall, writing, Friend Mode, wrap-up), FSRS
+scheduling, XP, the streak, daily reminders, the four AI providers, Dutch
+text-to-speech, and 60 seed phrases.
 
-Not built yet: the practice session itself, reminders, the dictionary, the book
-companion and the progress charts. The Today tab reports real setup state rather than
-pretending otherwise.
+Not built yet: the listening and role-play stages, the dictionary, the book companion,
+the progress charts, media suggestions, and settings beyond the AI screen. Those tabs
+say so plainly rather than showing a convincing mock-up.
+
+Picking this up? Start with **[HANDOFF.md](HANDOFF.md)** — it lists the rules that must
+not be broken and what to build next, in order.
