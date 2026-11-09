@@ -47,3 +47,8 @@ example
 *.db-journal
 *.db-wal
 *.bak
+
+# The owner's original spec, kept in place at the project root for convenience.
+# It is byte-identical to docs/spec.md, which IS tracked -- ignoring it here just
+# avoids carrying the same document twice.
+/Dutch_Learning_App_Claude_Code_Spec.md
