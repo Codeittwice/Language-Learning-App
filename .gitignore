@@ -41,3 +41,9 @@ example
 # generated native folders
 /ios
 /android
+
+# Local database snapshots and SQLite files
+*.db
+*.db-journal
+*.db-wal
+*.bak
