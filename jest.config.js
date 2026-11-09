@@ -6,6 +6,8 @@
 module.exports = {
   preset: 'jest-expo',
   moduleNameMapper: {
+    // Assets first: the general `@/` rule would otherwise swallow it.
+    '^@/assets/(.*)$': '<rootDir>/assets/$1',
     '^@/(.*)$': '<rootDir>/src/$1',
   },
   testMatch: ['<rootDir>/src/**/__tests__/**/*.test.ts'],
