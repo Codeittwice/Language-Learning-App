@@ -1,23 +1,27 @@
 {
   "expo": {
-    "name": "dutch-with-friends",
+    "name": "Dutch with Friends",
     "slug": "dutch-with-friends",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "dutchwithfriends",
+    "scheme": "dwf",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "supportsTablet": false
     },
     "android": {
+      "package": "com.hmgadzhev.dutchwithfriends",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#FDEDE1",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "permissions": ["POST_NOTIFICATIONS"]
     },
     "web": {
       "output": "server",
@@ -25,18 +29,35 @@
     },
     "plugins": [
       "expo-router",
+      "expo-sqlite",
+      "expo-localization",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#DD6214",
+          "defaultChannel": "daily-reminder",
+          "enableRemoteNotifications": false,
+          "enableBackgroundRemoteNotifications": false
+        }
+      ],
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#FDFBF7",
+          "dark": {
+            "backgroundColor": "#17140F"
+          },
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ],
-      "expo-sqlite",
-      "expo-secure-store",
-      "expo-localization",
-      "expo-sharing"
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

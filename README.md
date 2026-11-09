@@ -1,56 +1,83 @@
-# Welcome to your Expo app 👋
+# Dutch with Friends
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+An AI Dutch practice app for the phone, built around one thing the previous
+ChatGPT-based routine was missing: something that reminds you to show up.
 
-## Get started
+The teaching design comes from [`docs/spec.md`](docs/spec.md) and is the source of
+truth for *how* to teach. This app replaces that spec's web delivery layer (Next.js,
+Postgres, Supabase) with a local-first mobile one, because none of that can put a
+notification on your lock screen at half seven.
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Running it
 
 ```bash
-npm run reset-project
+npm start
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+Scan the QR code with Expo Go on Android. No Android Studio and no Android SDK are
+needed: every dependency ships inside the Expo SDK, and local notifications work in
+Expo Go (only *push* notifications do not).
 
-### Other setup steps
+If Metro is unreachable, allow Node through the Windows Defender prompt on private
+networks, or start with `npx expo start --tunnel`.
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+```bash
+npm run typecheck && npm test && npx eslint src
+```
 
-## Learn more
+## How it is put together
 
-To learn more about developing your project with Expo, look at the following resources:
+| Area | Where | Notes |
+|---|---|---|
+| Learning-day arithmetic | `src/time/day.ts` | A day runs from 04:00 to 04:00, so a late-night session counts for the day before. |
+| Database | `src/db/` | SQLite, 17 tables, hand-written append-only migrations. |
+| AI providers | `src/ai/` | OpenAI, Anthropic, Gemini, OpenRouter behind one interface. |
+| Screens | `src/app/` | Expo Router. Everything else lives outside this folder. |
+| Design tokens | `src/theme/tokens.ts` | The only place a colour or size is decided. |
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+### Decisions worth knowing before changing anything
 
-## Join the community
+**Day keys are never computed in SQL.** SQLite's `date('now')` is UTC, so at 01:00
+Amsterdam time it returns yesterday. Every `day_key` in the database comes from
+`src/time/day.ts`. Treat a `'now'` appearing in a SQL string as a bug.
 
-Join our community of developers creating universal apps.
+**`PRAGMA foreign_keys = ON` is set per connection and outside any transaction.**
+Inside a transaction it silently does nothing, and every `REFERENCES` clause becomes
+decoration while orphan rows pile up unnoticed.
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+**Migrations are append-only.** Once a migration has run on a real device its `up` is
+frozen; editing it makes that device and a fresh install diverge permanently with no
+way to tell. Add a new migration instead. The runner copies the database file aside
+before any upgrade.
+
+**The spec's strictest rules are CHECK constraints, not comments.** A hint can never
+produce an `independent` recall; recognition is never production; dictation is never
+writing. Those are enforced by the schema, so a future refactor that breaks one gets
+a loud SQLite error rather than a quietly corrupted learning record.
+
+**The AI proposes, application code decides.** Every structured call has a
+deterministic local fallback — self-grading for recall, raw text for writing
+feedback, a SQLite-built summary for the wrap-up. A model that cannot follow a schema
+must never leave you at a dead end, and this is also the offline path.
+
+**No Vercel AI SDK.** Its Expo guide exists to keep API keys server-side, which is
+the one problem a bring-your-own-key app does not have. Plain REST over `expo/fetch`
+instead, which is also the only fetch in React Native that genuinely streams.
+
+**Keys live only in SecureStore.** The UI sees `hasKey()` and a mask, never the
+value. Everything logged or persisted goes through `redact()`, and Gemini is
+authenticated with a header rather than the `?key=` query parameter its docs lead
+with, so no secret reaches a URL.
+
+**Costs are shown only where a provider publishes prices.** OpenRouter does; the
+others do not. Rather than ship a price table that would be stale within months, the
+app shows token counts and says the cost is unknown.
+
+## Status
+
+Working: database and migrations, the four AI providers with key validation and model
+selection, the tab shell, design system, and the learning-day/streak foundations.
+
+Not built yet: the practice session itself, reminders, the dictionary, the book
+companion and the progress charts. The Today tab reports real setup state rather than
+pretending otherwise.

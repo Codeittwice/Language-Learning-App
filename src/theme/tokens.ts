@@ -200,7 +200,7 @@ export const fonts = Platform.select({
  * Type scale. `display` is for numbers we want to feel like an achievement -- the
  * streak count, XP earned -- and nothing else.
  */
-export const type = {
+export const typography = {
   display: { fontSize: 44, lineHeight: 48, fontWeight: '800' },
   h1: { fontSize: 28, lineHeight: 34, fontWeight: '700' },
   h2: { fontSize: 22, lineHeight: 28, fontWeight: '700' },
@@ -242,7 +242,7 @@ export type Theme = {
   colors: ColorTokens;
   space: typeof space;
   radius: typeof radius;
-  type: typeof type;
+  typography: typeof typography;
   fonts: typeof fonts;
   shadow: typeof shadow;
   duration: typeof duration;
@@ -254,7 +254,7 @@ export function themeFor(scheme: 'light' | 'dark'): Theme {
     colors: scheme === 'dark' ? darkColors : lightColors,
     space,
     radius,
-    type,
+    typography,
     fonts,
     shadow,
     duration,
