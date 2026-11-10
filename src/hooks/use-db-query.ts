@@ -26,12 +26,14 @@ export function useDbQuery<T>(
     events?: readonly DbEvent[];
     /** Re-run when the screen regains focus. Default true. */
     refreshOnFocus?: boolean;
+    /** Re-run when a query parameter changes. */
+    queryKey?: string;
   } = {}
 ): DbQueryState<T> {
-  const { events, refreshOnFocus = true } = options;
+  const { events, refreshOnFocus = true, queryKey } = options;
   const db = useSQLiteContext();
 
-  const [data, setData] = useState<T | undefined>(undefined);
+  const [result, setResult] = useState<{ key: string | undefined; data: T }>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
@@ -44,6 +46,7 @@ export function useDbQuery<T>(
   });
 
   const mountedRef = useRef(true);
+  const latest = useRef(0);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -52,22 +55,23 @@ export function useDbQuery<T>(
   }, []);
 
   const execute = useCallback(async () => {
+    const request = ++latest.current;
     try {
-      const result = await runRef.current(db);
-      if (!mountedRef.current) return;
-      setData(result);
+      const data = await runRef.current(db);
+      if (!mountedRef.current || request !== latest.current) return;
+      setResult({ key: queryKey, data });
       setError(null);
     } catch (caught) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || request !== latest.current) return;
       setError(caught instanceof Error ? caught : new Error(String(caught)));
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (mountedRef.current && request === latest.current) setLoading(false);
     }
-  }, [db]);
+  }, [db, queryKey]);
 
   useEffect(() => {
-    void execute();
-  }, [execute]);
+    if (!refreshOnFocus) void execute();
+  }, [execute, refreshOnFocus]);
 
   useEffect(() => {
     if (!events?.length) return;
@@ -82,5 +86,7 @@ export function useDbQuery<T>(
     }, [execute, refreshOnFocus])
   );
 
-  return { data, loading, error, refresh: () => void execute() };
+  const refresh = useCallback(() => void execute(), [execute]);
+  const current = result?.key === queryKey ? result : undefined;
+  return { data: current?.data, loading: loading || Boolean(result && !current && !error), error, refresh };
 }

@@ -12,6 +12,7 @@
  * practice.
  */
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { z } from 'zod';
 
 import { aiStructured } from '@/ai/call';
 import { AiError } from '@/ai/errors';
@@ -35,6 +36,17 @@ export type RecallPrompt = {
   /** Progressive hints; each one costs the learner `independent`. */
   hints: string[];
 };
+
+export const RecallCheckpointSchema = z.object({
+  phraseIds: z.array(z.string()).max(20),
+  roundSizes: z.array(z.number().int().min(0).max(20)).max(4),
+  index: z.number().int().min(0).max(20),
+  baseReviews: z.number().int().min(0),
+  hintsUsed: z.number().int().min(0).max(3),
+  revealed: z.boolean(),
+  answer: z.string(),
+});
+export type RecallCheckpoint = z.infer<typeof RecallCheckpointSchema>;
 
 /** `geen zin hebben` -> `g___ z__ h_____` */
 export function maskPhrase(target: string): string {

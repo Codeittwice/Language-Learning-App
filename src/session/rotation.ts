@@ -77,7 +77,7 @@ export const ROTATION: readonly RotationTopic[] = [
     key: 'review',
     label: 'Mixed review',
     conversation: 'Unprepared, mixed conversation and review',
-    writing: 'Rewrite an earlier text from memory',
+    writing: 'Rewrite an earlier practice text from memory. If you have no earlier text, write a short message about a plan that changed.',
     challenge: 'Have a Dutch exchange and note what was hardest.',
     tags: ['core', 'repair', 'follow-up'],
   },

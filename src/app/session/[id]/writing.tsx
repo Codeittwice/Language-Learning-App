@@ -22,10 +22,9 @@ import { tutorSystemPrompt, writingFeedbackPrompt } from '@/ai/prompts';
 import { type WritingCorrection, type WritingFeedback, WritingFeedbackSchema } from '@/ai/schemas';
 import { emit } from '@/db/events';
 import { currentDayKey, getProfile, type LearnerProfile } from '@/db/repo/profile';
-import { saveCheckpoint } from '@/db/repo/sessions';
+import { getStages, saveCheckpoint } from '@/db/repo/sessions';
 import { awardXp } from '@/gamification/xp';
 import { advanceStage, sessionById } from '@/session/engine';
-import { stagesFor } from '@/session/plan';
 import { topicByKey, topicFor, type RotationTopic } from '@/session/rotation';
 import { nowIso } from '@/time/day';
 import { useTheme } from '@/theme/use-theme';
@@ -62,6 +61,7 @@ export default function WritingScreen() {
   const [encouragement, setEncouragement] = useState('');
   const [rawFeedback, setRawFeedback] = useState<string | null>(null);
   const [exerciseId, setExerciseId] = useState<number | null>(null);
+  const [saveError, setSaveError] = useState('');
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -71,17 +71,35 @@ export default function WritingScreen() {
     (async () => {
       if (!id) return;
       const session = await sessionById(db, id);
-      if (!session || cancelled) return;
-      const loadedProfile = await getProfile(db);
+      if (cancelled) return;
+      if (!session) throw new Error('Session unavailable');
+      const [loadedProfile, stageRows, saved] = await Promise.all([
+        getProfile(db), getStages(db, id),
+        db.getFirstAsync<{ id: number; original_text: string; revision_text: string | null }>(
+          'SELECT id, original_text, revision_text FROM writing_exercises WHERE session_id = ? ORDER BY id DESC LIMIT 1', [id]
+        ),
+      ]);
+      const feedback = saved ? await db.getAllAsync<Omit<WritingCorrection, 'isRequired'>>(
+        'SELECT original, corrected, category, explanation FROM corrections WHERE writing_exercise_id = ? AND is_required = 1 ORDER BY id LIMIT 2',
+        [saved.id]
+      ) : [];
       if (cancelled) return;
 
-      const stages = stagesFor(session.durationMode);
+      const stages = stageRows.map((stage) => stage.stage);
       setProfile(loadedProfile);
       setTopic(topicByKey(session.topicKey) ?? topicFor(session.sessionNumber));
       setStageIndex(Math.max(0, stages.indexOf(STAGE)));
       setStageCount(stages.length);
+      if (saved) {
+        setText(saved.original_text);
+        setRewrite(saved.revision_text ?? '');
+        setExerciseId(saved.id);
+        setCorrections(feedback.map((item) => ({ ...item, isRequired: true })));
+        if (!feedback.length) setRawFeedback('Your original is saved. Read it once, then try a fresh version.');
+        setPhase(feedback.length && !saved.revision_text ? 'feedback' : 'rewriting');
+      }
       setLoading(false);
-    })();
+    })().catch(() => { if (!cancelled) setSaveError('Could not open the saved exercise.'); });
 
     return () => {
       cancelled = true;
@@ -97,23 +115,23 @@ export default function WritingScreen() {
     if (!written) return;
 
     setChecking(true);
+    setSaveError('');
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const dayKey = await currentDayKey(db);
-
-    // Persist FIRST. Losing this to a provider error would be the single most
-    // trust-destroying bug in the app.
-    const inserted = await db.runAsync(
-      `INSERT INTO writing_exercises (session_id, prompt, target_sentences, original_text, input_mode, day_key, created_at)
-       VALUES (?, ?, ?, ?, 'typed', ?, ?)`,
-      [id, topic.writing, 5, written, dayKey, nowIso()]
-    );
-    const writingId = inserted.lastInsertRowId;
-    setExerciseId(writingId);
-
+    let persisted = false;
     try {
+      const dayKey = await currentDayKey(db);
+      // Preserve the learner's original before calling the provider.
+      const inserted = await db.runAsync(
+        `INSERT INTO writing_exercises (session_id, prompt, target_sentences, original_text, input_mode, day_key, created_at)
+         VALUES (?, ?, ?, ?, 'typed', ?, ?)`,
+        [id, topic.writing, 5, written, dayKey, nowIso()]
+      );
+      const writingId = inserted.lastInsertRowId;
+      persisted = true;
+      setExerciseId(writingId);
       const feedback = await aiStructured<WritingFeedback>(db, {
         purpose: 'writing.feedback',
         sessionId: id,
@@ -128,6 +146,7 @@ export default function WritingScreen() {
           { role: 'user', content: writingFeedbackPrompt({ task: topic.writing, text: written }) },
         ],
       });
+      controller.signal.throwIfAborted();
 
       // Spec section 8: at most two required corrections.
       const required = feedback.corrections.filter((c) => c.isRequired).slice(0, 2);
@@ -159,6 +178,11 @@ export default function WritingScreen() {
       emit('session:changed');
       setPhase(required.length > 0 ? 'feedback' : 'rewriting');
     } catch (error) {
+      if (controller.signal.aborted) return;
+      if (!persisted) {
+        setSaveError('Your text could not be saved. It is still in the editor.');
+        return;
+      }
       // The text is already saved. Show whatever we can and keep the stage usable.
       const message =
         error instanceof AiError ? error.userMessage : 'Could not get feedback right now.';
@@ -200,6 +224,7 @@ export default function WritingScreen() {
 
   const skip = useCallback(async () => {
     if (!id) return;
+    abortRef.current?.abort();
     const session = await sessionById(db, id);
     if (!session) return;
     const nextStage = await advanceStage(db, session, { stage: STAGE, skipped: true });
@@ -209,7 +234,8 @@ export default function WritingScreen() {
   if (loading || !topic) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color={theme.colors.primary} />
+        {saveError ? <Button title="Back to Today" onPress={() => router.replace('/')} /> : <ActivityIndicator color={theme.colors.primary} />}
+        {saveError ? <Text tone="danger">{saveError}</Text> : null}
       </View>
     );
   }
@@ -230,6 +256,7 @@ export default function WritingScreen() {
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.lg }}
         keyboardShouldPersistTaps="handled"
       >
+        {saveError ? <Text tone="danger" accessibilityRole="alert">{saveError}</Text> : null}
         <Card>
           <Text variant="caption" tone="faint">
             WRITE

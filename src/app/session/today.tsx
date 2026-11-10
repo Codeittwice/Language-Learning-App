@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
 import { getProfile } from '@/db/repo/profile';
-import { startOrResume } from '@/session/engine';
+import { getTodayState, startOrResume } from '@/session/engine';
 import type { DurationMode } from '@/types';
 import { useTheme } from '@/theme/use-theme';
 import { Button } from '@/ui/button';
@@ -21,7 +21,7 @@ import { Text } from '@/ui/text';
 const MODES: DurationMode[] = ['quick', 'short', 'standard'];
 
 export default function ResolveTodaySession() {
-  // A reminder that promises a quick round must actually open one.
+  // An existing session takes priority. The quick route starts a short drill when there is no active session.
   const { mode } = useLocalSearchParams<{ mode?: string }>();
   const db = useSQLiteContext();
   const router = useRouter();
@@ -34,9 +34,10 @@ export default function ResolveTodaySession() {
     (async () => {
       try {
         const requested = MODES.find((candidate) => candidate === mode);
-        const profile = await getProfile(db);
+        const [profile, today] = await Promise.all([getProfile(db), getTodayState(db)]);
         const session = await startOrResume(db, {
-          mode: requested ?? profile.defaultDurationMode,
+          mode: today.active?.durationMode ?? requested ?? profile.defaultDurationMode,
+          extra: !today.active && today.finishedToday,
         });
         if (cancelled) return;
         router.replace(`/session/${session.id}`);

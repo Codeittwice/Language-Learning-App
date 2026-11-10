@@ -18,8 +18,8 @@ export async function logAiCall(
   meta: CallMeta,
   cost: { costUsd: number | null; isEstimate: boolean },
   dayKey: DayKey
-): Promise<void> {
-  await db.runAsync(
+): Promise<number> {
+  const result = await db.runAsync(
     `INSERT INTO ai_calls (
        provider, model, purpose, mode, schema_strategy, session_id, stage,
        prompt_tokens, completion_tokens, cached_tokens, reasoning_tokens,
@@ -52,6 +52,7 @@ export async function logAiCall(
     ]
   );
   emit('ai:changed');
+  return result.lastInsertRowId;
 }
 
 export type SpendSummary = {

@@ -10,6 +10,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import seedData from '@/assets/seed/phrases.json';
 import { count, fromDb, newId, parseStringArray, toDb, toJsonColumn } from '@/db';
 import { emit } from '@/db/events';
+import { getBoolSetting, SETTING_KEYS } from '@/db/repo/settings';
 import {
   applyReview,
   cardFromColumns,
@@ -208,17 +209,11 @@ export async function addPhrase(
 ): Promise<{ phrase: Phrase; created: boolean }> {
   const normalized = normalizeDutch(input.dutch);
 
-  const existing = await db.getFirstAsync<PhraseRow>(
-    `SELECT ${SELECT_COLUMNS} FROM phrases WHERE normalized = ?`,
-    [normalized]
-  );
-  if (existing) return { phrase: toPhrase(existing), created: false };
-
   const id = newId();
   const timestamp = now.toISOString();
   const card = newCardColumns(now);
 
-  await db.runAsync(
+  const result = await db.runAsync(
     `INSERT INTO phrases (
        id, dutch, normalized, meaning_en, meaning_bg, example_nl, example_en, context,
        register, word_class, article, plural, diminutive,
@@ -229,7 +224,8 @@ export async function addPhrase(
        fsrs_learning_steps, fsrs_reps, fsrs_lapses, fsrs_state, fsrs_last_review,
        created_at, updated_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(normalized) DO NOTHING`,
     [
       id,
       input.dutch.trim(),
@@ -274,10 +270,14 @@ export async function addPhrase(
     ]
   );
 
-  emit('phrases:changed');
-  const created = await getPhrase(db, id);
-  if (!created) throw new Error('Phrase insert did not round-trip');
-  return { phrase: created, created: true };
+  const row = await db.getFirstAsync<PhraseRow>(
+    `SELECT ${SELECT_COLUMNS} FROM phrases WHERE normalized = ?`,
+    [normalized]
+  );
+  if (!row) throw new Error('Phrase insert did not round-trip');
+  const created = result.changes > 0;
+  if (created) emit('phrases:changed');
+  return { phrase: toPhrase(row), created };
 }
 
 export async function getPhrase(db: SQLiteDatabase, id: string): Promise<Phrase | null> {
@@ -343,11 +343,12 @@ export async function selectForRecall(
 
   const take = async (sql: string, args: (string | number)[]) => {
     if (picked.length >= options.limit) return;
-    const rows = await db.getAllAsync<PhraseRow>(sql, [...args, options.limit - picked.length]);
+    const rows = await db.getAllAsync<PhraseRow>(sql, [...args, options.limit]);
     for (const row of rows) {
       if (seen.has(row.id)) continue;
       seen.add(row.id);
       picked.push(row);
+      if (picked.length === options.limit) break;
     }
   };
 
@@ -429,28 +430,40 @@ export async function masteryCounts(
 export async function searchPhrases(
   db: SQLiteDatabase,
   query: string,
-  limit = 100
+  limit: number | null = 100
 ): Promise<Phrase[]> {
+  // SQLite treats a negative LIMIT as unlimited.
+  const rowLimit = limit ?? -1;
   const trimmed = query.trim();
   if (!trimmed) {
     const rows = await db.getAllAsync<PhraseRow>(
       `SELECT ${SELECT_COLUMNS} FROM phrases WHERE is_archived = 0
         ORDER BY introduced_at DESC LIMIT ?`,
-      [limit]
+      [rowLimit]
     );
     return rows.map(toPhrase);
   }
 
-  // FTS5 is a later migration; at a few hundred phrases LIKE is instant and cannot
-  // fail on a build without the extension compiled in.
-  const needle = `%${normalizeDutch(trimmed)}%`;
+  const normalized = normalizeDutch(trimmed);
+  const needle = `%${normalized || trimmed.toLowerCase()}%`;
   const english = `%${trimmed.toLowerCase()}%`;
+  if (normalized.length >= 3 && await getBoolSetting(db, SETTING_KEYS.fts5Available, false)) {
+    const rows = await db.getAllAsync<PhraseRow>(
+      `SELECT ${SELECT_COLUMNS} FROM phrases WHERE is_archived = 0 AND (register LIKE ? OR tags LIKE ? OR rowid IN (
+         SELECT rowid FROM phrases_fts WHERE normalized LIKE ?
+         UNION SELECT rowid FROM phrases_fts WHERE meaning_en LIKE ?
+         UNION SELECT rowid FROM phrases_fts WHERE meaning_bg LIKE ?
+       )) ORDER BY introduced_at DESC LIMIT ?`,
+      [english, english, needle, english, english, rowLimit]
+    );
+    return rows.map(toPhrase);
+  }
   const rows = await db.getAllAsync<PhraseRow>(
     `SELECT ${SELECT_COLUMNS} FROM phrases
       WHERE is_archived = 0
-        AND (normalized LIKE ? OR LOWER(meaning_en) LIKE ? OR LOWER(COALESCE(meaning_bg, '')) LIKE ?)
+        AND (normalized LIKE ? OR meaning_en LIKE ? OR meaning_bg LIKE ? OR register LIKE ? OR tags LIKE ?)
       ORDER BY introduced_at DESC LIMIT ?`,
-    [needle, english, english, limit]
+    [needle, english, english, english, english, rowLimit]
   );
   return rows.map(toPhrase);
 }

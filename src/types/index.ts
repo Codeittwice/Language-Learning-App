@@ -146,3 +146,15 @@ export function masteryBandFor(stabilityDays: number, reps: number): MasteryBand
   if (stabilityDays >= 21) return 'familiar';
   return 'learning';
 }
+
+/**
+ * The default daily XP goal.
+ *
+ * Lives here rather than in `src/gamification/xp.ts` because `src/db/repo/profile.ts`
+ * needs it too, and that module is imported BY the XP module -- a constant in either
+ * one would close an import cycle.
+ *
+ * It is 60 because the old 30 was met by three recall cards. See the balance notes in
+ * `src/gamification/xp.ts`.
+ */
+export const DEFAULT_DAILY_GOAL_XP = 60;

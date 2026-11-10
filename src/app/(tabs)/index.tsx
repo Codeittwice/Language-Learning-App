@@ -4,41 +4,74 @@
  * Everything on this screen is read from the database, including the honest bits:
  * which stages this session actually contains, how far through it you are, and
  * whether reminders can really reach you.
+ *
+ * The layout follows one rule: **one raised card, one orange button.** The screen used
+ * to be five identically bordered white cards stacked on top of each other, which made
+ * everything equally important and so nothing important. Now the session is the only
+ * card and the only action; the streak, the phrases due and the challenge are hairline
+ * rows on the page background. Depth and colour both mean "act on this".
  */
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { View } from 'react-native';
 
 import { isAiReady } from '@/ai/config';
-import { countPhrases, importSeedPhrases } from '@/db/repo/phrases';
-import { currentDayKey, getProfile } from '@/db/repo/profile';
+import { countPhrases } from '@/db/repo/phrases';
+import { currentDayKey, getProfile, type LearnerProfile } from '@/db/repo/profile';
 import { reportChallenge } from '@/db/repo/sessions';
-import { readStreak, type StreakState } from '@/gamification/streak';
-import { getDailyProgress } from '@/gamification/xp';
+import { readStreak, streakDisplay, type StreakDisplay, type StreakState } from '@/gamification/streak';
+import { getDailyProgress, readLevel, xpHistory } from '@/gamification/xp';
+import type { LevelState } from '@/gamification/levels';
 import { useDbQuery } from '@/hooks/use-db-query';
-import { getPermissionState, requestReminderPermission } from '@/notifications';
-import { healIfCleared, reconcileReminders } from '@/notifications/schedule';
 import { getTodayState, startOrResume, type TodayState } from '@/session/engine';
+import { stagesFor } from '@/session/plan';
+import { addDays, type DayKey } from '@/time/day';
 import { DURATION_MINUTES, type DurationMode, STAGE_LABELS } from '@/types';
 import { useTheme } from '@/theme/use-theme';
 import { Button, Chip, tapFeedback } from '@/ui/button';
-import { ProgressRing, StreakFlame } from '@/ui/progress';
-import { Card, Row, ScreenScroll, Separator } from '@/ui/surface';
+import { ListRow } from '@/ui/list-row';
+import { MediaStrip } from '@/ui/media-strip';
+import { Onboarding } from '@/ui/onboarding';
+import { ProgressBar, StreakBadge } from '@/ui/progress';
+import { SegmentedControl } from '@/ui/segmented';
+import { WeekStrip, type DayXp } from '@/ui/stats';
+import { Card, Row, ScreenScroll } from '@/ui/surface';
 import { Text } from '@/ui/text';
-import { stagesFor } from '@/session/plan';
 
 type Snapshot = {
   today: TodayState;
   streak: StreakState;
+  streakState: StreakDisplay;
   xp: number;
   goalXp: number;
   goalMet: boolean;
+  level: LevelState;
+  week: DayXp[];
+  dayKey: DayKey;
+  dateLabel: string;
   phraseCount: number;
   aiReady: boolean;
   defaultMode: DurationMode;
+  profile: LearnerProfile;
 };
+
+/**
+ * `gamification:changed` is deliberately NOT in this list.
+ *
+ * Every XP award emits it, and the tab navigator keeps this screen mounted while a
+ * session runs -- so it was re-running all six of these queries after every single
+ * recall card. The screen refreshes on focus, which is the only moment its numbers are
+ * actually being looked at.
+ */
+const TODAY_EVENTS = ['session:changed', 'settings:changed', 'challenges:changed'] as const;
+
+const DURATIONS: readonly { value: DurationMode; label: string }[] = [
+  { value: 'quick', label: `${DURATION_MINUTES.quick} min` },
+  { value: 'short', label: `${DURATION_MINUTES.short} min` },
+  { value: 'standard', label: `${DURATION_MINUTES.standard} min` },
+];
 
 export default function TodayScreen() {
   const theme = useTheme();
@@ -47,51 +80,61 @@ export default function TodayScreen() {
 
   const [mode, setMode] = useState<DurationMode | null>(null);
   const [starting, setStarting] = useState(false);
-  const [notificationsGranted, setNotificationsGranted] = useState<boolean | null>(null);
 
   const snapshot = useDbQuery<Snapshot>(
     async (database) => {
-      // Ship with something to practise: an empty bank makes the first recall round
-      // fall flat, so the seed is imported on first run.
-      if ((await countPhrases(database)) === 0) {
-        await importSeedPhrases(database);
-      }
-
       const dayKey = await currentDayKey(database);
-      const [today, streak, progress, phraseCount, aiReady, profile] = await Promise.all([
-        getTodayState(database),
-        readStreak(database, dayKey),
-        getDailyProgress(database, dayKey),
-        countPhrases(database),
-        isAiReady(database),
-        getProfile(database),
-      ]);
+      const [today, streak, progress, level, week, phraseCount, aiReady, profile] =
+        await Promise.all([
+          getTodayState(database),
+          readStreak(database, dayKey),
+          getDailyProgress(database, dayKey),
+          readLevel(database),
+          xpHistory(database, addDays(dayKey, -6), dayKey),
+          countPhrases(database),
+          isAiReady(database),
+          getProfile(database),
+        ]);
+
+      // The clock is read here rather than in render: a date string built during
+      // render is impure, and the screen re-reads on focus anyway.
+      const now = new Date();
+
+      // xpHistory only returns days that have a row, so fill the gaps.
+      const byDay = new Map(week.map((entry) => [entry.dayKey, entry]));
+      const filled: DayXp[] = Array.from({ length: 7 }, (_, index) => {
+        const key = addDays(dayKey, index - 6);
+        const entry = byDay.get(key);
+        return { dayKey: key, xp: entry?.xp ?? 0, goalMet: entry?.goalMet ?? false };
+      });
 
       return {
         today,
         streak,
+        streakState: streakDisplay(streak, now.getHours()),
         xp: progress.xp,
         goalXp: progress.goalXp,
         goalMet: progress.goalMet,
+        level,
+        week: filled,
+        dayKey,
+        dateLabel: now.toLocaleDateString(undefined, {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'short',
+        }),
         phraseCount,
         aiReady,
         defaultMode: profile.defaultDurationMode,
+        profile,
       };
     },
-    { events: ['session:changed', 'gamification:changed', 'settings:changed', 'challenges:changed'] }
+    { events: TODAY_EVENTS }
   );
-
-  // Keep reminders healthy on every visit: repairs the schedule if a force-stop or an
-  // OEM battery saver wiped it, and refreshes the fourteen-day horizon.
-  useEffect(() => {
-    void getPermissionState().then((state) => setNotificationsGranted(state.granted));
-    void healIfCleared(db).catch(() => undefined);
-    void reconcileReminders(db, 'foreground').catch(() => undefined);
-  }, [db]);
 
   const data = snapshot.data;
   const active = data?.today.active ?? null;
-  const chosenMode = mode ?? active?.durationMode ?? data?.defaultMode ?? 'standard';
+  const chosenMode = active?.durationMode ?? mode ?? data?.defaultMode ?? 'standard';
 
   const start = useCallback(
     async (extra = false) => {
@@ -107,16 +150,10 @@ export default function TodayScreen() {
     [chosenMode, db, router, starting]
   );
 
-  const allowReminders = useCallback(async () => {
-    const granted = await requestReminderPermission();
-    setNotificationsGranted(granted);
-    if (granted) await reconcileReminders(db, 'permission-granted');
-  }, [db]);
-
   if (!data) {
     return (
       <ScreenScroll>
-        <Text variant="h1">Today</Text>
+        <Text variant="title">Today</Text>
         <Text variant="small" tone="muted">
           {snapshot.error ? snapshot.error.message : 'Loading…'}
         </Text>
@@ -124,126 +161,163 @@ export default function TodayScreen() {
     );
   }
 
-  const { today, streak } = data;
+  const { today, streak, level } = data;
   const stages = stagesFor(chosenMode);
   const resuming = Boolean(active);
+  const remaining = Math.max(0, data.goalXp - data.xp);
+
+  const goalLine = data.goalMet
+    ? "Today's goal is done. Anything else is a bonus."
+    : data.streakState === 'at_risk'
+      ? `${remaining} XP left today to keep the streak.`
+      : streak.current > 0
+        ? `${remaining} XP to keep the streak going.`
+        : `${remaining} XP to start a streak. One short session covers it.`;
 
   return (
     <ScreenScroll>
-      {/* Streak and daily goal */}
-      <Card>
-        <Row>
-          <StreakFlame days={streak.current} atRisk={streak.atRisk} />
-          <View style={{ flex: 1 }} />
-          <ProgressRing
-            progress={data.goalXp > 0 ? data.xp / data.goalXp : 0}
-            size={76}
-            strokeWidth={8}
-          >
-            <View style={{ alignItems: 'center' }}>
-              <Text variant="bodyStrong">{data.xp}</Text>
-              <Text variant="caption" tone="faint">
-                /{data.goalXp}
-              </Text>
-            </View>
-          </ProgressRing>
-        </Row>
-        <Text variant="caption" tone="faint">
-          {data.goalMet
-            ? "Today's goal is done. Anything else is a bonus."
-            : `${Math.max(0, data.goalXp - data.xp)} XP to keep the streak.`}
+      {!data.profile.onboardedAt && <Onboarding profile={data.profile} />}
+
+      {/* Date, streak, level. No card: this is status, not an action. */}
+      <Row>
+        <Text variant="caption" tone="faint" style={{ flex: 1, textTransform: 'uppercase' }}>
+          {data.dateLabel}
         </Text>
-      </Card>
+        <StreakBadge
+          days={streak.current}
+          state={data.streakState}
+          freezes={streak.freezesAvailable}
+        />
+        <View
+          style={{
+            paddingHorizontal: theme.space.sm + 2,
+            paddingVertical: 6,
+            borderRadius: theme.radius.pill,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+          }}
+        >
+          <Text variant="caption">{`LV ${level.level}`}</Text>
+        </View>
+      </Row>
 
-      {/* The session */}
-      <Card>
-        <Row>
-          <View style={{ flex: 1 }}>
-            <Text variant="caption" tone="faint">
-              SESSION {today.sessionNumber} · WEEK {today.week}
-            </Text>
-            <Text variant="h2">{today.topicLabel}</Text>
-          </View>
-        </Row>
-
+      {/* The hero: what you are about to practise, in the serif voice. */}
+      <View style={{ gap: theme.space.xs }}>
+        <Text variant="caption" tone="faint">
+          {`SESSION ${today.sessionNumber}  ·  WEEK ${today.week}`}
+        </Text>
+        <Text variant="title">{today.topicLabel}</Text>
         <Text variant="small" tone="muted">
           {today.weekFocus}
         </Text>
+      </View>
 
-        {resuming && today.progress ? (
-          <Text variant="small" tone="accent">
-            Stage {today.progress.completed + 1} of {today.progress.total} ·{' '}
-            {today.progress.nextStage ? STAGE_LABELS[today.progress.nextStage] : 'wrap up'} next
+      {/* Today's goal. */}
+      <View style={{ gap: theme.space.sm }}>
+        <Row gap={theme.space.sm}>
+          <Text variant="caption" tone="faint" style={{ flex: 1 }}>
+            TODAY
           </Text>
-        ) : (
-          <Row style={{ gap: theme.space.sm }}>
-            {(['quick', 'short', 'standard'] as DurationMode[]).map((option) => (
-              <Chip
-                key={option}
-                label={`~${DURATION_MINUTES[option]} min`}
-                selected={chosenMode === option}
-                onPress={() => setMode(option)}
-              />
-            ))}
+          <Text variant="numeral">{data.xp}</Text>
+          <Text variant="smallStrong" tone="muted">{`/ ${data.goalXp} XP`}</Text>
+        </Row>
+        <ProgressBar
+          progress={data.goalXp > 0 ? data.xp / data.goalXp : 0}
+          height={10}
+          color={data.goalMet ? theme.colors.success : theme.colors.primary}
+        />
+        <Text variant="small" tone="muted">
+          {goalLine}
+        </Text>
+      </View>
+
+      {/* The one card, and the one orange button. */}
+      <Card>
+        {resuming && today.progress ? (
+          <Row>
+            <Ionicons name="play-forward" size={18} color={theme.colors.accentText} />
+            <Text variant="small" tone="accent" style={{ flex: 1 }}>
+              {`Stage ${today.progress.completed + 1} of ${today.progress.total} · ${
+                today.progress.nextStage
+                  ? STAGE_LABELS[today.progress.nextStage]
+                  : 'wrap up'
+              } next`}
+            </Text>
           </Row>
+        ) : (
+          <SegmentedControl
+            accessibilityLabel="Session length"
+            options={DURATIONS}
+            value={chosenMode}
+            onChange={setMode}
+            disabled={starting}
+          />
         )}
 
-        {!resuming ? (
-          <Text variant="caption" tone="faint">
-            {stages.map((stage) => STAGE_LABELS[stage]).join(' → ')}
-          </Text>
-        ) : null}
-
         <Button
-          title={resuming ? 'Continue' : today.finishedToday ? 'Extra practice' : 'Start'}
+          title={resuming ? 'Continue' : today.finishedToday ? 'Extra practice' : 'Start session'}
           loading={starting}
           onPress={() => void start(!resuming && today.finishedToday)}
           leading={
             <Ionicons
               name={resuming ? 'play-forward' : 'play'}
-              size={18}
+              size={17}
               color={theme.colors.onAccent}
             />
           }
         />
 
+        {!resuming ? (
+          <Text variant="caption" tone="faint" center style={{ letterSpacing: 0 }}>
+            {stages.map((stage) => STAGE_LABELS[stage]).join('  ·  ')}
+          </Text>
+        ) : null}
+
         {today.finishedToday && !resuming ? (
-          <Text variant="caption" tone="faint">
+          <Text variant="caption" tone="faint" style={{ letterSpacing: 0 }}>
             Today&apos;s session is already counted. Extra practice does not advance the
             schedule.
           </Text>
         ) : null}
       </Card>
 
-      {/* Due now */}
-      <Card>
-        <Row>
-          <Ionicons name="repeat" size={20} color={theme.colors.accentText} />
-          <View style={{ flex: 1 }}>
-            <Text variant="bodyStrong">
-              {today.dueCount === 0
-                ? 'Nothing due right now'
-                : `${today.dueCount} phrase${today.dueCount === 1 ? '' : 's'} due`}
-            </Text>
-            <Text variant="caption" tone="faint">
-              {data.phraseCount} in your bank
-            </Text>
-          </View>
-        </Row>
-      </Card>
+      {/* Hairline rows, in place of a card each. */}
+      <View>
+        <ListRow
+          first
+          icon="repeat"
+          tone="accent"
+          title={
+            today.dueCount === 0
+              ? 'Nothing due right now'
+              : `${today.dueCount} phrase${today.dueCount === 1 ? '' : 's'} due`
+          }
+          detail={`${data.phraseCount} in your bank`}
+        />
 
-      {/* Real-world challenge */}
+        <ListRow
+          icon="trending-up"
+          tone="streak"
+          title={`Level ${level.level} · ${level.tier.name}`}
+          detail={`${level.toNextLevel} XP to level ${level.level + 1}`}
+          onPress={() => router.push('/progress')}
+        />
+
+        {today.challenge ? (
+          <ListRow icon="star-outline" tone="primary" title="Today's challenge">
+            <Text variant="small" tone="muted">
+              {today.challenge.action}
+            </Text>
+          </ListRow>
+        ) : null}
+      </View>
+
       {today.challenge ? (
-        <Card>
+        <View style={{ gap: theme.space.sm }}>
           <Text variant="caption" tone="faint">
-            YOUR CHALLENGE
+            HOW DID IT GO? ANY ANSWER IS FINE
           </Text>
-          <Text variant="body">{today.challenge.action}</Text>
-          <Separator />
-          <Text variant="caption" tone="faint">
-            How did it go? Any answer is fine.
-          </Text>
-          <Row style={{ flexWrap: 'wrap', gap: theme.space.sm }}>
+          <Row style={{ flexWrap: 'wrap', rowGap: theme.space.sm }} gap={theme.space.sm}>
             {(
               [
                 ['completed', 'Did it'],
@@ -263,51 +337,37 @@ export default function TodayScreen() {
               />
             ))}
           </Row>
-        </Card>
+        </View>
       ) : null}
 
-      {/* Honest setup warnings, only when something is actually wrong */}
-      {!data.aiReady ? (
-        <Card>
-          <Row>
-            <Ionicons name="key-outline" size={20} color={theme.colors.warning} />
-            <Text variant="bodyStrong" style={{ flex: 1 }}>
-              No AI connected
-            </Text>
-          </Row>
-          <Text variant="small" tone="muted">
-            Recall still works: answers are checked against the phrase itself and you can
-            grade yourself. Conversation and feedback need a provider key.
+      {/* The week, so a streak is something you can see rather than a number. */}
+      <View style={{ gap: theme.space.md }}>
+        <Row>
+          <Text variant="caption" tone="faint" style={{ flex: 1 }}>
+            THIS WEEK
           </Text>
-          <Button
-            title="Connect a provider"
-            variant="secondary"
-            size="medium"
+          <Text variant="caption" tone="faint" style={{ letterSpacing: 0 }}>
+            {`${data.week.filter((day) => day.goalMet).length} of 7 goals met`}
+          </Text>
+        </Row>
+        <WeekStrip days={data.week} goalXp={data.goalXp} todayKey={data.dayKey} />
+      </View>
+
+      {/* Honest setup warnings, only when something is actually wrong. */}
+      {!data.aiReady ? (
+        <View>
+          <ListRow
+            first
+            icon="key-outline"
+            tone="neutral"
+            title="No AI connected"
+            detail="Recall still works; conversation and feedback need a provider key."
             onPress={() => router.push('/settings/ai')}
           />
-        </Card>
+        </View>
       ) : null}
 
-      {notificationsGranted === false ? (
-        <Card>
-          <Row>
-            <Ionicons name="notifications-off-outline" size={20} color={theme.colors.warning} />
-            <Text variant="bodyStrong" style={{ flex: 1 }}>
-              Reminders are off
-            </Text>
-          </Row>
-          <Text variant="small" tone="muted">
-            This is the part that actually keeps the habit going. One a day, around
-            19:30, and it stops once you have practised.
-          </Text>
-          <Button
-            title="Allow reminders"
-            variant="secondary"
-            size="medium"
-            onPress={() => void allowReminders()}
-          />
-        </Card>
-      ) : null}
+      <MediaStrip />
     </ScreenScroll>
   );
 }

@@ -34,13 +34,12 @@ import {
   cancelById,
   DAILY_CHANNEL_ID,
   getPermissionState,
-  pendingCount,
+  readReminderQueue,
   RESCUE_CHANNEL_ID,
 } from '@/notifications';
+import { readReminderTime } from '@/notifications/preferences';
 import { type CopyContext, pickCopy, rescueCopy } from '@/notifications/copy';
 import {
-  DEFAULT_REMINDER_HOUR,
-  DEFAULT_REMINDER_MINUTE,
   REMINDER_HORIZON_DAYS,
   reminderId,
   RESCUE_HOUR,
@@ -81,7 +80,19 @@ export type ReconcileReport = {
  * The only scheduling entry point. Idempotent and total: it always describes the
  * complete desired state, so calling it twice in a row changes nothing.
  */
-export async function reconcileReminders(
+const queued = new WeakMap<SQLiteDatabase, Promise<unknown>>();
+
+function scheduleOperation<T>(db: SQLiteDatabase, task: () => Promise<T>) {
+  const current = (queued.get(db)?.catch(() => undefined) ?? Promise.resolve()).then(task);
+  queued.set(db, current);
+  return current;
+}
+
+export function reconcileReminders(db: SQLiteDatabase, reason: ReconcileReason) {
+  return scheduleOperation(db, () => rebuildReminders(db, reason));
+}
+
+async function rebuildReminders(
   db: SQLiteDatabase,
   reason: ReconcileReason
 ): Promise<ReconcileReport> {
@@ -116,9 +127,8 @@ export async function reconcileReminders(
     };
   }
 
-  const [hour, minute, rescueEnabled, todayKey] = await Promise.all([
-    getNumberSetting(db, SETTING_KEYS.reminderHour, DEFAULT_REMINDER_HOUR),
-    getNumberSetting(db, SETTING_KEYS.reminderMinute, DEFAULT_REMINDER_MINUTE),
+  const [{ hour, minute }, rescueEnabled, todayKey] = await Promise.all([
+    readReminderTime(db),
     getBoolSetting(db, SETTING_KEYS.rescueEnabled, true),
     currentDayKey(db),
   ]);
@@ -134,7 +144,8 @@ export async function reconcileReminders(
   let scheduled = 0;
   let skippedToday = false;
 
-  for (const dayKey of dayKeysFrom(todayKey, REMINDER_HORIZON_DAYS)) {
+  for (const dayKey of dayKeysFrom(todayKey, REMINDER_HORIZON_DAYS + 1)) {
+    if (scheduled === REMINDER_HORIZON_DAYS) break;
     // Nothing should nag someone who has already done the work today.
     if (dayKey === todayKey && progress.goalMet) {
       skippedToday = true;
@@ -147,13 +158,15 @@ export async function reconcileReminders(
       continue;
     }
 
-    const copy = pickCopy({ ...context, dayKey });
+    const copy = pickCopy(dayKey === todayKey
+      ? { ...context, dayKey }
+      : { ...context, dayKey, streak: 0, dueCount: 0, challenge: null });
     await Notifications.scheduleNotificationAsync({
       identifier: reminderId(dayKey),
       content: {
         title: copy.title,
         body: copy.body,
-        data: copy.data,
+        data: { ...copy.data, fireAt: fireAt.getTime() },
         sound: true,
       },
       trigger: {
@@ -167,13 +180,14 @@ export async function reconcileReminders(
 
   // A second notification is only justified when a real run is about to end.
   let rescueScheduled = false;
-  if (rescueEnabled && !progress.goalMet && streak.current >= RESCUE_MIN_STREAK) {
+  const dailyBeforeRescue = hour * 60 + minute < RESCUE_HOUR * 60 + RESCUE_MINUTE;
+  if (rescueEnabled && dailyBeforeRescue && !progress.goalMet && streak.current >= RESCUE_MIN_STREAK) {
     const fireAt = localTimeToUtc(todayKey, RESCUE_HOUR, RESCUE_MINUTE, timezone);
     if (fireAt.getTime() > now) {
       const copy = rescueCopy({ ...context, streak: streak.current });
       await Notifications.scheduleNotificationAsync({
         identifier: rescueId(todayKey),
-        content: { title: copy.title, body: copy.body, data: copy.data, sound: true },
+      content: { title: copy.title, body: copy.body, data: { ...copy.data, fireAt: fireAt.getTime() }, sound: true },
         trigger: {
           type: SchedulableTriggerInputTypes.DATE,
           date: fireAt,
@@ -247,10 +261,12 @@ async function recordState(
  * The addressable per-day identifier is exactly why individual DATE triggers beat one
  * repeating DAILY trigger: a DAILY trigger could not be cancelled for today only.
  */
-export async function cancelToday(db: SQLiteDatabase): Promise<void> {
-  const todayKey = await currentDayKey(db);
-  await cancelById(reminderId(todayKey));
-  await cancelById(rescueId(todayKey));
+export function cancelToday(db: SQLiteDatabase): Promise<void> {
+  return scheduleOperation(db, async () => {
+    const todayKey = await currentDayKey(db);
+    await cancelById(reminderId(todayKey));
+    await cancelById(rescueId(todayKey));
+  });
 }
 
 export type ReminderHealth = {
@@ -258,6 +274,7 @@ export type ReminderHealth = {
   canAskAgain: boolean;
   enabled: boolean;
   pending: number;
+  nextAt: Date | null;
   lastReconcileAt: string | null;
   scheduledTimezone: string | null;
   liveTimezone: string;
@@ -275,13 +292,14 @@ export type ReminderHealth = {
 export async function checkReminderHealth(db: SQLiteDatabase): Promise<ReminderHealth> {
   const permission = await getPermissionState();
   const enabled = await getBoolSetting(db, SETTING_KEYS.remindersEnabled, true);
-  const pending = await pendingCount();
+  const { pending, nextAt } = await readReminderQueue();
 
   return {
     permissionGranted: permission.granted,
     canAskAgain: permission.canAskAgain,
     enabled,
     pending,
+    nextAt,
     lastReconcileAt: await getStringSetting(db, SETTING_KEYS.lastReconcileAt),
     scheduledTimezone: await getStringSetting(db, SETTING_KEYS.scheduledTimezone),
     liveTimezone: deviceTimezone(),

@@ -6,9 +6,6 @@
  * is what lets the spec's forty-minute session be consumed across several sittings
  * without changing any of its pedagogy.
  *
- * Milestone note: the listening and role-play stages are not built yet, so no plan
- * includes them. The Today screen says which stages a session will contain rather
- * than implying six.
  */
 import type { DurationMode, SessionStage } from '@/types';
 
@@ -41,13 +38,17 @@ const SPECS: Record<DurationMode, StageSpec[]> = {
   ],
   short: [
     { stage: 'recall', rounds: [3, 2] },
+    { stage: 'listening', rounds: [3] },
     { stage: 'writing', rounds: [1] },
+    { stage: 'topic_conversation', rounds: [1, 1, 1] },
     { stage: 'casual_conversation', rounds: [5] },
     { stage: 'wrap_up', rounds: [1] },
   ],
   standard: [
     { stage: 'recall', rounds: [4, 4] },
+    { stage: 'listening', rounds: [3] },
     { stage: 'writing', rounds: [1] },
+    { stage: 'topic_conversation', rounds: [1, 1, 1] },
     { stage: 'casual_conversation', rounds: [6, 6] },
     { stage: 'wrap_up', rounds: [1] },
   ],

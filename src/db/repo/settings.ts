@@ -28,6 +28,8 @@ export const SETTING_KEYS = {
   reminderResetCount: 'reminders.resetCount',
   ignoredStreak: 'reminders.ignoredStreak',
 
+  soundEnabled: 'sound.enabled',
+
   fts5Available: 'db.fts5Available',
   seedImportedAt: 'db.seedImportedAt',
 } as const;
@@ -99,4 +101,20 @@ export async function getNumberSetting(
   fallback: number
 ): Promise<number> {
   return getSetting(db, key, z.number(), fallback);
+}
+
+/* Sound -------------------------------------------------------------------- */
+
+/**
+ * Interface sound, on by default.
+ *
+ * Read once at startup into the in-memory flag in `src/audio/sfx.ts`; a database read
+ * per button press would put I/O on the tap path.
+ */
+export async function getSoundEnabled(db: SQLiteDatabase): Promise<boolean> {
+  return getBoolSetting(db, SETTING_KEYS.soundEnabled, true);
+}
+
+export async function setSoundPreference(db: SQLiteDatabase, enabled: boolean): Promise<void> {
+  await setSetting(db, SETTING_KEYS.soundEnabled, enabled);
 }

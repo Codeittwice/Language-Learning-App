@@ -14,8 +14,9 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Circle } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 
+import type { StreakDisplay } from '@/gamification/streak';
 import { useTheme } from '@/theme/use-theme';
 import { Text } from '@/ui/text';
 
@@ -126,43 +127,110 @@ export function ProgressBar({ progress, height = 8, color, style }: ProgressBarP
   );
 }
 
-export type StreakFlameProps = {
+/**
+ * The flame, drawn.
+ *
+ * It used to be the 🔥 emoji, with 🕯 for an at-risk day. Emoji render differently on
+ * every OS version, cannot take a theme colour, and were the single most dated thing
+ * on the screen. Twelve lines of path data fix all three.
+ */
+export function Flame({ size = 16, color }: { size?: number; color?: string }) {
+  const theme = useTheme();
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path
+        d="M12 2.5c2.9 3.6 1.4 5.4 0 6.7 1.9-.7 4 .2 4 2.5 0 1.8-1.4 3-1.4 4.7 0 2.1 1.8 3.6 1.8 3.6-1.2 1-2.8 1.5-4.4 1.5-3.8 0-6.9-2.7-6.9-6.3 0-4.9 4.6-6 6.9-12.7Z"
+        stroke={color ?? theme.colors.streakText}
+        strokeWidth={1.7}
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </Svg>
+  );
+}
+
+export type StreakBadgeProps = {
   days: number;
-  /** True when today has not been practised yet. */
-  atRisk?: boolean;
-  size?: number;
+  state: StreakDisplay;
+  /** Banked freezes, shown so they are not a surprise when one is spent. */
+  freezes?: number;
 };
 
 /**
- * The streak counter.
+ * The streak, as a pill.
  *
- * Reads "0" plainly rather than hiding at zero: a streak you can see is one you can
- * start, and pretending it does not exist helps nobody.
+ * Never shows a bare "0": a zero with the word "days" after it reads as a failure
+ * report on a learner who may simply be new. At zero it becomes an invitation.
  */
-export function StreakFlame({ days, atRisk = false, size = 28 }: StreakFlameProps) {
+export function StreakBadge({ days, state, freezes = 0 }: StreakBadgeProps) {
   const theme = useTheme();
   const scale = useSharedValue(1);
 
   useEffect(() => {
     if (days <= 0) return;
-    scale.value = withSpring(1.18, { damping: 6, stiffness: 220 }, () => {
+    scale.value = withSpring(1.14, { damping: 6, stiffness: 220 }, () => {
       scale.value = withSpring(1, { damping: 12, stiffness: 180 });
     });
   }, [days, scale]);
 
   const style = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
+  const quiet = state === 'none';
+  const warn = state === 'at_risk';
+
   return (
-    <Animated.View style={[{ flexDirection: 'row', alignItems: 'center', gap: 6 }, style]}>
-      <Text style={{ fontSize: size }}>{days > 0 && !atRisk ? '\u{1F525}' : '\u{1F56F}\u{FE0F}'}</Text>
-      <View>
-        <Text variant="h2" style={{ color: days > 0 ? theme.colors.streak : theme.colors.textFaint }}>
-          {days}
+    <Animated.View
+      style={[
+        {
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 5,
+          paddingLeft: theme.space.sm,
+          paddingRight: theme.space.md - 2,
+          paddingVertical: 6,
+          borderRadius: theme.radius.pill,
+          backgroundColor: quiet ? 'transparent' : theme.colors.streakSoft,
+          borderWidth: quiet || warn ? 1 : 0,
+          borderColor: warn ? theme.colors.streak : theme.colors.border,
+        },
+        style,
+      ]}
+    >
+      <Flame size={14} color={quiet ? theme.colors.textFaint : theme.colors.streakText} />
+      <Text
+        variant="smallStrong"
+        style={{ color: quiet ? theme.colors.textMuted : theme.colors.streakText }}
+      >
+        {quiet ? 'Start a streak' : `${days}`}
+      </Text>
+      {freezes > 0 && !quiet ? (
+        <Text variant="caption" style={{ color: theme.colors.streakText, letterSpacing: 0 }}>
+          {`· ${freezes} freeze${freezes === 1 ? '' : 's'}`}
         </Text>
-        <Text variant="caption" tone="faint">
-          {days === 1 ? 'day' : 'days'}
+      ) : null}
+    </Animated.View>
+  );
+}
+
+export type LevelRingProps = {
+  level: number;
+  /** 0 to 1 through the current level. */
+  progress: number;
+  size?: number;
+};
+
+/** The level, as a number inside the arc that fills towards the next one. */
+export function LevelRing({ level, progress, size = 92 }: LevelRingProps) {
+  return (
+    <ProgressRing progress={progress} size={size} strokeWidth={Math.round(size / 13)}>
+      <View style={{ alignItems: 'center' }}>
+        <Text variant="caption" tone="faint" style={{ fontSize: 9 }}>
+          LEVEL
+        </Text>
+        <Text variant="display" style={{ fontSize: Math.round(size * 0.39), lineHeight: Math.round(size * 0.41) }}>
+          {level}
         </Text>
       </View>
-    </Animated.View>
+    </ProgressRing>
   );
 }

@@ -247,12 +247,12 @@ export async function completeStage(
       `UPDATE session_stages
           SET status = 'completed', rounds_done = rounds_total,
               completed_at = ?, result_json = ?
-        WHERE session_id = ? AND stage = ? AND status <> 'completed'`,
+        WHERE session_id = ? AND stage = ? AND status IN ('pending','in_progress')`,
       [now, result === undefined ? null : toJsonColumn(result), sessionId, stage]
     );
     firstTime = changed.changes === 1;
 
-    await db.runAsync('UPDATE sessions SET next_stage = ?, updated_at = ? WHERE id = ?', [
+    if (firstTime) await db.runAsync('UPDATE sessions SET next_stage = ?, updated_at = ? WHERE id = ?', [
       nextStage,
       now,
       sessionId,
@@ -271,12 +271,12 @@ export async function skipStage(
 ): Promise<void> {
   const now = nowIso();
   await db.withTransactionAsync(async () => {
-    await db.runAsync(
+    const changed = await db.runAsync(
       `UPDATE session_stages SET status = 'skipped', completed_at = ?
         WHERE session_id = ? AND stage = ? AND status NOT IN ('completed','skipped')`,
       [now, sessionId, stage]
     );
-    await db.runAsync('UPDATE sessions SET next_stage = ?, updated_at = ? WHERE id = ?', [
+    if (changed.changes) await db.runAsync('UPDATE sessions SET next_stage = ?, updated_at = ? WHERE id = ?', [
       nextStage,
       now,
       sessionId,
@@ -305,18 +305,21 @@ export async function completeSession(
 ): Promise<CompletionResult> {
   const now = nowIso();
 
-  const result = await db.runAsync(
+  const result = await db.getFirstAsync<{ counted: number }>(
     `UPDATE sessions
         SET status = 'completed',
             counted = CASE WHEN kind = 'scheduled' THEN 1 ELSE 0 END,
             next_stage = NULL, completed_at = ?, updated_at = ?
-      WHERE id = ? AND status = 'in_progress'`,
-    [now, now, sessionId]
+      WHERE id = ? AND status = 'in_progress'
+        AND NOT EXISTS (SELECT 1 FROM session_stages WHERE session_id = ? AND status IN ('pending','in_progress'))
+        AND EXISTS (SELECT 1 FROM session_stages WHERE session_id = ? AND stage = 'wrap_up' AND status = 'completed')
+      RETURNING counted`,
+    [now, now, sessionId, sessionId, sessionId]
   );
 
   emit('session:changed', 'gamification:changed');
   return {
-    counted: result.changes === 1,
+    counted: result?.counted === 1,
     completedSessions: await completedSessionCount(db),
   };
 }
@@ -352,20 +355,14 @@ export async function saveCheckpoint(
   nextStage: SessionStage | null,
   state: unknown
 ): Promise<number> {
-  let seq = 0;
-  await db.withTransactionAsync(async () => {
-    const row = await db.getFirstAsync<{ max_seq: number | null }>(
-      'SELECT MAX(seq) AS max_seq FROM session_checkpoints WHERE session_id = ?',
-      [sessionId]
-    );
-    seq = (row?.max_seq ?? 0) + 1;
-    await db.runAsync(
-      `INSERT INTO session_checkpoints (session_id, seq, stage, next_stage, state_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [sessionId, seq, stage, nextStage, toJsonColumn(state), nowIso()]
-    );
-  });
-  return seq;
+  const row = await db.getFirstAsync<{ seq: number }>(
+    `INSERT INTO session_checkpoints (session_id, seq, stage, next_stage, state_json, created_at)
+     SELECT ?, COALESCE(MAX(seq), 0) + 1, ?, ?, ?, ? FROM session_checkpoints WHERE session_id = ?
+     RETURNING seq`,
+    [sessionId, stage, nextStage, toJsonColumn(state), nowIso(), sessionId]
+  );
+  if (!row) throw new Error('Checkpoint insert did not return a sequence');
+  return row.seq;
 }
 
 export async function getLatestCheckpoint(
@@ -440,8 +437,8 @@ export async function assignChallenge(
 ): Promise<void> {
   await db.runAsync(
     `INSERT INTO real_world_challenges (assigned_session_id, rotation_day, action, created_at)
-     VALUES (?, ?, ?, ?)`,
-    [sessionId, rotationDay, action, nowIso()]
+     SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM real_world_challenges WHERE assigned_session_id = ?)`,
+    [sessionId, rotationDay, action, nowIso(), sessionId]
   );
   emit('challenges:changed');
 }

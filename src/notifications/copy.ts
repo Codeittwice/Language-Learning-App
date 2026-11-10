@@ -241,16 +241,16 @@ const TEMPLATES: Template[] = [
     id: 'sport-training',
     eligible: (ctx) => ctx.sport !== null,
     render: (ctx) => ({
-      title: `Dutch you can use at ${ctx.sport}`,
-      body: 'The things people actually shout, not textbook sentences.',
+      title: `Dutch for ${ctx.sport}`,
+      body: 'Try a phrase you could use with the people you train with.',
       data: TO_SESSION,
     }),
   },
   {
     id: 'sport-after',
     eligible: (ctx) => ctx.sport !== null,
-    render: () => ({
-      title: 'After training, everyone talks',
+    render: (ctx) => ({
+      title: `After ${ctx.sport}, join the chat`,
       body: 'Five minutes now so you can join in next time.',
       data: TO_SESSION,
     }),
@@ -280,7 +280,7 @@ const TEMPLATES: Template[] = [
     eligible: always,
     render: () => ({
       title: 'Just one phrase tonight',
-      body: 'That is a real option, and it keeps the run alive.',
+      body: 'Start with one and see how it feels.',
       data: TO_QUICK,
     }),
   },
@@ -308,10 +308,18 @@ function dayOrdinal(dayKey: DayKey): number {
  * the same copy -- which makes it reproducible in a test.
  */
 export function pickCopy(ctx: CopyContext): ReminderCopy {
+  const ordinal = Math.abs(dayOrdinal(ctx.dayKey));
   const eligible = TEMPLATES.filter((template) => template.eligible(ctx));
   const pool = eligible.length > 0 ? eligible : TEMPLATES.filter((t) => t.eligible === always);
+  const sport = pool.filter((template) => template.id.startsWith('sport-'));
+  if (sport.length === 2 && sport[0] && sport[1]) {
+    const remaining = pool.filter((template) => !template.id.startsWith('sport-'));
+    remaining.unshift(sport[0]);
+    remaining.splice(Math.floor(pool.length / 2), 0, sport[1]);
+    return remaining[ordinal % remaining.length]!.render(ctx);
+  }
 
-  const template = pool[Math.abs(dayOrdinal(ctx.dayKey)) % pool.length];
+  const template = pool[ordinal % pool.length];
   if (!template) {
     // Unreachable while any unconditional template exists, but never crash the
     // scheduler over copy.
@@ -328,7 +336,7 @@ export function pickCopy(ctx: CopyContext): ReminderCopy {
 export function rescueCopy(ctx: CopyContext): ReminderCopy {
   return {
     title: `${ctx.streak} days on the line`,
-    body: 'One round before bed keeps it. Takes about four minutes.',
+    body: 'A quick round can help you reach today’s goal.',
     data: TO_QUICK,
   };
 }

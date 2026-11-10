@@ -145,7 +145,8 @@ export function Chip({ label, selected = false, onPress, tone = 'neutral', leadi
     accent: theme.colors.accentText,
     success: theme.colors.success,
     danger: theme.colors.danger,
-    streak: theme.colors.streak,
+    // The reward orange is a fill colour; `streakText` is its accessible twin.
+    streak: theme.colors.streakText,
   };
 
   const body = (

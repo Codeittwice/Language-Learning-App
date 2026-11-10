@@ -18,6 +18,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
+import { play } from '@/audio/sfx';
 import { useTheme } from '@/theme/use-theme';
 import { Button, successFeedback } from '@/ui/button';
 import { Text } from '@/ui/text';
@@ -182,6 +183,7 @@ export function RoundComplete({
 
   useEffect(() => {
     successFeedback();
+    play('round');
     badge.value = withSequence(
       withSpring(1.1, { damping: 7, stiffness: 200 }),
       withSpring(1, { damping: 14, stiffness: 160 })

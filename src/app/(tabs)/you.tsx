@@ -49,6 +49,12 @@ export default function YouScreen() {
           detail={aiDetail}
           href="/settings/ai"
         />
+        <Separator />
+        <SettingsRow icon="notifications-outline" title="Reminders" detail="Time, permission and schedule" href="/settings/reminders" />
+        <Separator />
+        <SettingsRow icon="person-outline" title="Practice preferences" detail="Topics, session length and Dutch voice" href="/settings/profile" />
+        <Separator />
+        <SettingsRow icon="download-outline" title="Learning data" detail="Exports and backups" href="/settings/data" />
       </Card>
 
       <Card>

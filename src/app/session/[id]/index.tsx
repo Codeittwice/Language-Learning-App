@@ -20,9 +20,9 @@ import type { SessionStage } from '@/types';
 /** Which file handles each stage. */
 const ROUTE_FOR: Record<SessionStage, string> = {
   recall: 'recall',
-  listening: 'recall', // Not built yet; the plans never include it.
+  listening: 'listening',
   writing: 'writing',
-  topic_conversation: 'casual',
+  topic_conversation: 'roleplay',
   casual_conversation: 'casual',
   wrap_up: 'wrapup',
 };
@@ -64,7 +64,9 @@ export default function SessionResume() {
       }
 
       router.replace(`/session/${session.id}/${ROUTE_FOR[stage]}`);
-    })();
+    })().catch(() => {
+      if (!cancelled) setProblem('Could not read the saved session.');
+    });
 
     return () => {
       cancelled = true;

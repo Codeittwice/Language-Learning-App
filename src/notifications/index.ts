@@ -23,7 +23,7 @@ import { Platform } from 'react-native';
  * favour of `shouldShowBanner` / `shouldShowList`, and relying on it means no
  * foreground banner and no error explaining why.
  */
-Notifications.setNotificationHandler({
+if (Platform.OS !== 'web') Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
     shouldShowList: true,
@@ -72,6 +72,7 @@ export type PermissionState = {
 };
 
 export async function getPermissionState(): Promise<PermissionState> {
+  if (Platform.OS === 'web') return { granted: false, canAskAgain: false };
   const settings = await Notifications.getPermissionsAsync();
   const granted =
     settings.granted ||
@@ -100,17 +101,13 @@ export async function requestReminderPermission(): Promise<boolean> {
   );
 }
 
-/** How many notifications we currently have queued with the OS. */
-export async function pendingCount(): Promise<number> {
-  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-  return scheduled.length;
-}
-
 export async function cancelAll(): Promise<void> {
+  if (Platform.OS === 'web') return;
   await Notifications.cancelAllScheduledNotificationsAsync();
 }
 
 export async function cancelById(identifier: string): Promise<void> {
+  if (Platform.OS === 'web') return;
   try {
     await Notifications.cancelScheduledNotificationAsync(identifier);
   } catch {
@@ -118,17 +115,19 @@ export async function cancelById(identifier: string): Promise<void> {
   }
 }
 
-/** The next time anything is due to fire, for the reminder-health card. */
-export async function nextScheduledAt(): Promise<Date | null> {
+/** Read one OS snapshot. iOS reports a relative interval for a DATE trigger. */
+export async function readReminderQueue(): Promise<{ pending: number; nextAt: Date | null }> {
+  if (Platform.OS === 'web') return { pending: 0, nextAt: null };
   const scheduled = await Notifications.getAllScheduledNotificationsAsync();
   let earliest: number | null = null;
+  const now = Date.now();
 
   for (const request of scheduled) {
-    const trigger = request.trigger as { type?: string; value?: number } | null;
-    // DATE triggers report their instant as `value`; that is all we schedule.
-    if (trigger && typeof trigger.value === 'number') {
-      earliest = earliest === null ? trigger.value : Math.min(earliest, trigger.value);
+    const trigger = request.trigger as { value?: number; date?: number; timestamp?: number } | null;
+    const value = request.content.data?.fireAt ?? trigger?.value ?? trigger?.date ?? trigger?.timestamp;
+    if (typeof value === 'number' && value > now) {
+      earliest = earliest === null ? value : Math.min(earliest, value);
     }
   }
-  return earliest === null ? null : new Date(earliest);
+  return { pending: scheduled.length, nextAt: earliest === null ? null : new Date(earliest) };
 }

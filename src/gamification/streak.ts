@@ -101,6 +101,41 @@ export function computeStreak(
   };
 }
 
+/**
+ * The hour after which an unfinished day starts reading as at risk.
+ *
+ * `atRisk` in `StreakState` is true from the moment the learning day begins, which is
+ * correct as data and wrong as a mood: it meant every morning opened with a dead
+ * candle and a grey zero, telling someone their streak was in danger when they had
+ * fourteen hours left. The flame stays lit until the evening.
+ */
+export const AT_RISK_HOUR = 18;
+
+export type StreakDisplay =
+  /** No run going. Show an invitation, not a zero. */
+  | 'none'
+  /** Today is already banked. */
+  | 'safe'
+  /** A run is going and today is not done, but there is still plenty of day. */
+  | 'pending'
+  /** A run is going, today is not done, and the evening is here. */
+  | 'at_risk';
+
+/**
+ * How the streak should read right now.
+ *
+ * Pure, and takes the local hour rather than reading the clock, so every state is
+ * reachable in a test.
+ */
+export function streakDisplay(
+  streak: Pick<StreakState, 'current' | 'atRisk'>,
+  localHour: number
+): StreakDisplay {
+  if (!streak.atRisk) return streak.current > 0 ? 'safe' : 'none';
+  if (streak.current <= 0) return 'none';
+  return localHour >= AT_RISK_HOUR ? 'at_risk' : 'pending';
+}
+
 /** How many freezes a streak of this length has earned, capped. */
 export function earnedFreezes(currentStreak: number): number {
   return Math.min(MAX_FREEZES, Math.floor(currentStreak / DAYS_PER_FREEZE));

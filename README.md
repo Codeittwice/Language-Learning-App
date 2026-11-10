@@ -30,7 +30,7 @@ npm run typecheck && npm test && npx eslint src
 | Area | Where | Notes |
 |---|---|---|
 | Learning-day arithmetic | `src/time/day.ts` | A day runs from 04:00 to 04:00, so a late-night session counts for the day before. |
-| Database | `src/db/` | SQLite, 17 tables, hand-written append-only migrations. |
+| Database | `src/db/` | SQLite with append-only migrations and optional FTS5 search. |
 | AI providers | `src/ai/` | OpenAI, Anthropic, Gemini, OpenRouter behind one interface. |
 | Screens | `src/app/` | Expo Router. Everything else lives outside this folder. |
 | Design tokens | `src/theme/tokens.ts` | The only place a colour or size is decided. |
@@ -73,15 +73,22 @@ with, so no secret reaches a URL.
 others do not. Rather than ship a price table that would be stale within months, the
 app shows token counts and says the cost is unknown.
 
-## Status
+## Practice and settings
 
-Working: the daily practice session (recall, writing, Friend Mode, wrap-up), FSRS
-scheduling, XP, the streak, daily reminders, the four AI providers, Dutch
-text-to-speech, and 60 seed phrases.
+New short and standard sessions include recall, listening, writing, topic role-play,
+Friend Mode, and wrap-up. Quick practice uses three stages. The Day 7 review compares
+saved examples with the learner's first session and asks for an optional confidence rating.
 
-Not built yet: the listening and role-play stages, the dictionary, the book companion,
-the progress charts, media suggestions, and settings beyond the AI screen. Those tabs
-say so plainly rather than showing a convincing mock-up.
+The Dictionary and Book tabs feed the same phrase bank and review schedule. Progress
+shows mastery, daily XP, self-reported confidence, corrections, challenges and milestones.
+Today links to short listening searches based on completed practice.
 
-Picking this up? Start with **[HANDOFF.md](HANDOFF.md)** — it lists the rules that must
-not be broken and what to build next, in order.
+The You tab has reminder health, profile and voice settings, and JSON and Markdown
+exports. Uncached lookups and optional feedback can use a configured AI provider. Saved
+lookups, the phrase bank, and the core practice flow remain available offline.
+
+See [HANDOFF.md](HANDOFF.md) for the persistence rules and device acceptance checks.
+
+Web builds use SQLite in a WebAssembly worker. When serving a web export outside
+Expo Hosting, set `Cross-Origin-Embedder-Policy: credentialless` and
+`Cross-Origin-Opener-Policy: same-origin` on the host.

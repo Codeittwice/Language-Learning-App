@@ -13,13 +13,13 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { currentDayKey } from '@/db/repo/profile';
 import { completedSessionCount } from '@/db/repo/sessions';
 import { sessionById } from '@/session/engine';
-import { readStreak, type StreakState } from '@/gamification/streak';
+import { readStreak, streakDisplay, type StreakState } from '@/gamification/streak';
 import { getDailyProgress } from '@/gamification/xp';
 import { cancelToday, reconcileReminders } from '@/notifications/schedule';
 import { useTheme } from '@/theme/use-theme';
 import { Button, successFeedback } from '@/ui/button';
 import { Confetti, CountUp } from '@/ui/celebrate';
-import { ProgressRing, StreakFlame } from '@/ui/progress';
+import { ProgressRing, StreakBadge } from '@/ui/progress';
 import { Card, Row } from '@/ui/surface';
 import { Text } from '@/ui/text';
 
@@ -112,7 +112,11 @@ export default function SessionCompleteScreen() {
         <Animated.View entering={FadeIn.delay(320)}>
           <Card>
             <Row>
-              <StreakFlame days={streak.current} atRisk={streak.atRisk} />
+              <StreakBadge
+                days={streak.current}
+                state={streakDisplay(streak, new Date().getHours())}
+                freezes={streak.freezesAvailable}
+              />
               <View style={{ flex: 1 }}>
                 <Text variant="bodyStrong">
                   {streak.current === 0

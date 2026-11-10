@@ -8,9 +8,11 @@
 import { Stack } from 'expo-router';
 
 import { useTheme } from '@/theme/use-theme';
+import { usePracticeTime } from '@/session/use-practice-time';
 
 export default function SessionLayout() {
   const theme = useTheme();
+  usePracticeTime();
   return (
     <Stack
       screenOptions={{

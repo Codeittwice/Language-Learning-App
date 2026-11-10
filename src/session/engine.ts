@@ -13,8 +13,10 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { awardXp, noteSessionCompleted } from '@/gamification/xp';
+import { refreshAchievements } from '@/gamification/achievements';
 import { countDue } from '@/db/repo/phrases';
-import { currentDayKey } from '@/db/repo/profile';
+import { currentDayKey, getProfile } from '@/db/repo/profile';
+import { learningDayRangeUtc } from '@/time/day';
 import {
   abandonSession,
   completedSessionCount,
@@ -30,7 +32,7 @@ import {
   skipStage,
   startStage,
 } from '@/db/repo/sessions';
-import { firstStage, nextStageAfter, planFor, stagesFor } from '@/session/plan';
+import { firstStage, planFor, stagesFor } from '@/session/plan';
 import { rotationDayFor, topicFor, weekFocusFor, weekFor } from '@/session/rotation';
 import type { DurationMode, SessionStage } from '@/types';
 
@@ -98,10 +100,12 @@ async function hasCompletedScheduledSessionOn(
   db: SQLiteDatabase,
   dayKey: string
 ): Promise<boolean> {
+  const profile = await getProfile(db);
+  const { startUtc, endUtc } = learningDayRangeUtc(dayKey, profile.timezone, profile.dayStartHour);
   const row = await db.getFirstAsync<{ n: number }>(
     `SELECT COUNT(*) AS n FROM sessions
-      WHERE day_key = ? AND kind = 'scheduled' AND counted = 1`,
-    [dayKey]
+      WHERE completed_at >= ? AND completed_at < ? AND counted = 1`,
+    [startUtc, endUtc]
   );
   return (row?.n ?? 0) > 0;
 }
@@ -171,7 +175,7 @@ export async function resumeStage(
 
   const stages = await getStages(db, session.id);
   const pending = stages.find((stage) => stage.status !== 'completed' && stage.status !== 'skipped');
-  return pending?.stage ?? firstStage(session.durationMode);
+  return pending?.stage ?? (stages.length ? 'wrap_up' : firstStage(session.durationMode));
 }
 
 /**
@@ -189,6 +193,11 @@ export async function checkpointConflict(
 
   const expected = await resumeStage(db, session);
   const fromCheckpoint = checkpoint.nextStage ?? checkpoint.stage;
+  const records = await getStages(db, session.id);
+  const checkpointRecord = records.find((record) => record.stage === checkpoint.stage);
+  if (!checkpoint.nextStage && (checkpointRecord?.status === 'completed' || checkpointRecord?.status === 'skipped')) {
+    return { conflicted: false, checkpointStage: fromCheckpoint };
+  }
   return {
     conflicted: fromCheckpoint !== expected,
     checkpointStage: fromCheckpoint,
@@ -211,7 +220,14 @@ export async function advanceStage(
   session: Session,
   outcome: StageOutcome
 ): Promise<SessionStage | null> {
-  const next = nextStageAfter(session.durationMode, outcome.stage);
+  // Existing sessions keep the plan recorded when they were created.
+  const records = await getStages(db, session.id);
+  const index = records.findIndex((record) => record.stage === outcome.stage);
+  if (index < 0) throw new Error('Stage is outside this session plan');
+  const next = records[index + 1]?.stage ?? null;
+  if (records[index]?.status === 'completed' || records[index]?.status === 'skipped') {
+    return (await getSession(db, session.id))?.nextStage ?? null;
+  }
 
   if (outcome.skipped) {
     await skipStage(db, session.id, outcome.stage, next);
@@ -250,10 +266,12 @@ export async function finishSession(
   session: Session
 ): Promise<FinishResult> {
   const result = await completeSession(db, session.id);
-  const dayKey = await currentDayKey(db);
+  const saved = await getSession(db, session.id);
+  if (saved?.status !== 'completed') throw new Error('This session still has unfinished stages');
 
   let xpAwarded = 0;
-  if (result.counted) {
+  if (saved.counted && saved.completedAt) {
+    const dayKey = await currentDayKey(db, new Date(saved.completedAt));
     await noteSessionCompleted(db, dayKey);
     const award = await awardXp(db, dayKey, {
       kind: 'SESSION_COMPLETE',
@@ -261,6 +279,7 @@ export async function finishSession(
       dedupeKey: `session:${session.id}`,
     });
     xpAwarded = award.awarded;
+    await refreshAchievements(db).catch(() => undefined);
   }
 
   return {

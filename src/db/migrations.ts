@@ -16,6 +16,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { backupDatabaseFile } from '@/db/backup';
 import { SCHEMA_V1 } from '@/db/schema-v1';
+import { enablePhraseIndex } from '@/db/schema-v2';
 import { nowIso } from '@/time/day';
 
 export type Migration = {
@@ -30,6 +31,27 @@ export const MIGRATIONS: readonly Migration[] = [
     label: 'initial schema',
     async up(db) {
       await db.execAsync(SCHEMA_V1);
+    },
+  },
+  { version: 2, label: 'optional phrase search index', up: enablePhraseIndex },
+  {
+    version: 3,
+    label: 'raise the daily goal from 30 to 60 XP',
+    async up(db) {
+      // The old default was met by three unprompted recall cards -- under a minute --
+      // so the goal measured nothing and the streak was effectively free. See the
+      // balance notes in src/gamification/xp.ts.
+      //
+      // Nothing distinguishes "never changed it" from "chose 30 deliberately", so
+      // every 30 moves. It is one tap to set it back in Practice preferences, and a
+      // goal that is quietly meaningless is the worse of the two failures.
+      await db.runAsync('UPDATE learner_profile SET daily_goal_xp = 60 WHERE daily_goal_xp = 30');
+
+      // A day already banked keeps the goal it was judged against: rewriting history
+      // would re-open days the streak has already counted. Only days still open move.
+      await db.runAsync(
+        'UPDATE daily_activity SET goal_xp = 60 WHERE goal_xp = 30 AND goal_met = 0'
+      );
     },
   },
 ];
@@ -76,6 +98,8 @@ export async function migrate(db: SQLiteDatabase): Promise<void> {
 
   // Only worth backing up if there is data to lose -- a first install has none.
   if (from > 0) {
+    // Merge committed WAL pages into the main file before copying it.
+    await db.execAsync('PRAGMA wal_checkpoint(TRUNCATE);');
     await backupDatabaseFile(from);
   }
 
@@ -86,10 +110,8 @@ export async function migrate(db: SQLiteDatabase): Promise<void> {
         'INSERT OR REPLACE INTO __migration_log (version, label, applied_at) VALUES (?, ?, ?)',
         [migration.version, migration.label, nowIso()]
       );
+      await db.execAsync(`PRAGMA user_version = ${migration.version};`);
     });
-    // PRAGMA values cannot be bound. This is a number from our own frozen array, so
-    // templating it is safe; never template anything that reaches here from outside.
-    await db.execAsync(`PRAGMA user_version = ${Math.trunc(migration.version)};`);
   }
 }
 

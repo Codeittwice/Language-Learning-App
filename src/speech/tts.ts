@@ -29,6 +29,17 @@ const MISSING_VOICE_HELP =
     : 'No Dutch voice is installed. Open Settings, then Accessibility, Spoken Content, Voices, and add Dutch.';
 
 let cached: VoiceAvailability | null = null;
+let installedVoices: Speech.Voice[] = [];
+let preferences: { voiceId: string | null; rate: number } = { voiceId: null, rate: 1 };
+
+export function configureDutchSpeech(voiceId: string | null, rate: number) {
+  preferences = { voiceId, rate: Number.isFinite(rate) ? Math.max(0.5, Math.min(1.5, rate)) : 1 };
+}
+
+export async function listDutchVoices() {
+  await checkDutchVoice(true);
+  return installedVoices;
+}
 
 /**
  * Look for an installed Dutch voice. Cached, because enumerating voices is slow
@@ -39,7 +50,8 @@ export async function checkDutchVoice(force = false): Promise<VoiceAvailability>
 
   try {
     const voices = await Speech.getAvailableVoicesAsync();
-    const dutch = voices.filter((voice) => voice.language?.toLowerCase().startsWith('nl'));
+    const dutch = voices.filter((voice) => /^nl(?:[-_]|$)/i.test(voice.language));
+    installedVoices = dutch;
 
     // Prefer Netherlands Dutch over Flemish, which the spec rules out.
     const preferred =
@@ -52,10 +64,9 @@ export async function checkDutchVoice(force = false): Promise<VoiceAvailability>
       instructions: dutch.length > 0 ? null : MISSING_VOICE_HELP,
     };
   } catch (error) {
-    // Some devices refuse to enumerate. Assume speech works and let it try: a voice
-    // that turns out to be wrong is better than disabling the feature on a guess.
     console.warn('[tts] could not list voices', error);
-    cached = { available: true, voiceId: null, count: 0, instructions: null };
+    installedVoices = [];
+    cached = { available: false, voiceId: null, count: 0, instructions: 'Could not check for a Dutch voice. Try refreshing the voices in Practice preferences.' };
   }
 
   return cached;
@@ -66,6 +77,8 @@ export type SpeakOptions = {
   rate?: number;
   onDone?: () => void;
   onError?: () => void;
+  voiceId?: string | null;
+  previewRate?: number;
 };
 
 /**
@@ -100,6 +113,12 @@ export async function speakDutch(text: string, options: SpeakOptions = {}): Prom
   if (!trimmed) return;
 
   const voice = await checkDutchVoice();
+  if (!voice.available) {
+    options.onError?.();
+    return;
+  }
+  const requested = options.voiceId === undefined ? preferences.voiceId : options.voiceId;
+  const selected = installedVoices.find((candidate) => candidate.identifier === requested);
   await stopSpeaking();
 
   const chunks = chunkText(trimmed);
@@ -107,11 +126,11 @@ export async function speakDutch(text: string, options: SpeakOptions = {}): Prom
     const isLast = index === chunks.length - 1;
     Speech.speak(chunk, {
       language: DUTCH_LANGUAGE,
-      voice: voice.voiceId ?? undefined,
-      rate: options.rate ?? 1,
+      voice: selected?.identifier ?? voice.voiceId ?? undefined,
+      rate: options.previewRate ?? (options.rate ?? 1) * preferences.rate,
       onDone: isLast ? options.onDone : undefined,
       onError: options.onError,
-      onStopped: isLast ? options.onDone : undefined,
+      onStopped: isLast ? options.onError : undefined,
     });
   });
 }

@@ -10,7 +10,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { parseStringArray, toJsonColumn } from '@/db';
 import { emit } from '@/db/events';
 import { type DayKey, dayKeyOf, nowIso } from '@/time/day';
-import type { DurationMode } from '@/types';
+import { DEFAULT_DAILY_GOAL_XP, type DurationMode } from '@/types';
 
 export type LearnerProfile = {
   nativeLanguage: string;
@@ -106,7 +106,7 @@ export async function getProfile(db: SQLiteDatabase): Promise<LearnerProfile> {
       timezone: deviceTimezone(),
       ttsVoiceId: null,
       ttsRate: 1,
-      dailyGoalXp: 30,
+      dailyGoalXp: DEFAULT_DAILY_GOAL_XP,
       onboardedAt: null,
     };
   }

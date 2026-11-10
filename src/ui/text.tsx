@@ -6,7 +6,7 @@
  */
 import { Text as RNText, type TextProps, type TextStyle } from 'react-native';
 
-import type { typography } from '@/theme/tokens';
+import type { ColorTokens, typography } from '@/theme/tokens';
 import { useTheme } from '@/theme/use-theme';
 
 type Variant = keyof typeof typography;
@@ -20,6 +20,22 @@ type Tone =
   | 'danger'
   | 'success'
   | 'onAccent';
+
+/**
+ * Tone to colour token. Module-level, because this component renders once per piece
+ * of text on screen and allocating the map in the component body made it the most
+ * frequently constructed object in the app.
+ */
+const TONE_TOKEN: Record<Tone, keyof ColorTokens> = {
+  default: 'text',
+  muted: 'textMuted',
+  faint: 'textFaint',
+  accent: 'accentText',
+  primary: 'primaryText',
+  danger: 'danger',
+  success: 'success',
+  onAccent: 'onAccent',
+};
 
 export type AppTextProps = TextProps & {
   variant?: Variant;
@@ -36,22 +52,11 @@ export function Text({
 }: AppTextProps) {
   const theme = useTheme();
 
-  const colorFor: Record<Tone, string> = {
-    default: theme.colors.text,
-    muted: theme.colors.textMuted,
-    faint: theme.colors.textFaint,
-    accent: theme.colors.accentText,
-    primary: theme.colors.primaryText,
-    danger: theme.colors.danger,
-    success: theme.colors.success,
-    onAccent: theme.colors.onAccent,
-  };
-
   return (
     <RNText
       style={[
         theme.typography[variant] as TextStyle,
-        { color: colorFor[tone] },
+        { color: theme.colors[TONE_TOKEN[tone]] },
         center ? { textAlign: 'center' } : null,
         style,
       ]}

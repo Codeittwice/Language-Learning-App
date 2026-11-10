@@ -1,7 +1,7 @@
 # Handoff: finishing Dutch with Friends
 
-You are picking up a half-built app. This document tells you what exists, what does
-not, which rules must not be broken, and what to build next in what order.
+This document covers the app's current practice flow, persistence rules, and device
+acceptance checks.
 
 Read [`docs/spec.md`](docs/spec.md) before writing anything. It is the owner's own
 teaching design and it is the source of truth for *how* to teach. Where this codebase
@@ -26,47 +26,25 @@ that weakens it as a serious regression.
 
 ## Current state
 
-Working end to end:
+- The daily practice loop is recall, listening, writing, topic role-play, Friend Mode,
+  and wrap-up. Quick practice has three stages. Sessions started on v1 keep their saved plan.
+- Onboarding and Practice preferences cover topics, duration, and the device's Dutch voice.
+- Daily reminder settings include time, streak rescue, OS queue health and recovery.
+- Dictionary, book companion, progress and milestones share the on-device phrase bank and FSRS.
+- Day 7 pairs a mixed review with saved Day 1 examples and optional self-rated confidence.
+- Media suggestions open YouTube searches based on completed practice.
+- Settings exports JSON or Markdown and can share the pre-upgrade database snapshots.
+- Migration v2 adds an optional FTS5 index with the existing LIKE search as fallback.
 
-- SQLite schema v1 (17 tables) with append-only migrations and a pre-upgrade backup.
-- Four AI providers (OpenAI, Anthropic, Gemini, OpenRouter) behind one interface, with
-  key validation, live model listing and per-call cost logging.
-- A practice session: **recall → writing → Friend Mode → wrap-up**, resumable across
-  sittings, idempotent completion, checkpoints at every step.
-- FSRS scheduling, XP, daily goal, streak with freezes.
-- The daily reminder: a rolling 14-day window of individual notifications with 25
-  rotating copy templates.
-- Today tab, AI settings screen, Dutch TTS, 60 seed phrases.
-
-Verification, all currently clean:
+Run these before and after changes:
 
 ```bash
-npm run typecheck && npm test && npx eslint src --max-warnings 0
+npm run typecheck
+npm run lint
+npm test -- --runInBand
+npx eslint src --max-warnings 0
+npx expo export --platform all
 ```
-
-```bash
-npx expo export --platform android
-```
-
-142 tests pass. Run all four before and after every change — the tests are the only
-thing standing between you and silently corrupting someone's learning history.
-
-### Not built yet
-
-| Area | State |
-|---|---|
-| Listening stage | Zod schema + prompt exist; no screen, not in any plan |
-| Topic role-play stage | Not in any plan; no screen |
-| Dictionary tab | Table, schema, prompt and repo search exist; UI is a placeholder |
-| Book companion | Tables and schema exist; UI is a placeholder |
-| Progress tab | `masteryCounts`, `xpHistory`, `challengeHistory` exist; UI is a placeholder |
-| Media suggestions | Table and schema exist; nothing generates or shows them |
-| Settings beyond AI | Reminders, voice, profile, data export — all unbuilt |
-| Onboarding | `learner_profile.sport` / `.interests` / `.onboarded_at` are never set |
-| Achievements | Table exists, no logic |
-| Day 7 review | Rotation day 7 exists; no special flow |
-| FTS5 search | Migration v2 not written; `searchPhrases` uses LIKE |
-| Export | No JSON/Markdown export |
 
 ---
 
@@ -86,7 +64,7 @@ decoration. It is already set in `migrate()`; do not move it.
 
 **3. Migrations are append-only.** Once a migration has run on the owner's phone, its
 `up` is frozen forever. Editing it makes his device and a fresh install diverge with no
-way to detect the difference. Add migration v2; never touch v1.
+way to detect the difference. Append the next migration without editing v1 or v2.
 
 **4. A hint can never yield `independent`, and recognition is never production.** This
 is enforced in three places: CHECK constraints on `phrase_reviews`, `deriveStatus` in
@@ -155,132 +133,25 @@ Do not "fix" these.
   correctly.
 - **`RecallEvaluation` carries no `status` or `learnerAnswer` field.** We hold the answer
   already, and status is derived locally so the invariants cannot be violated.
-- **Listening and role-play are absent from every plan.** A four-stage session that works
-  beats a six-stage session that half-works. `planFor()` in `src/session/plan.ts` is
-  where they go back in.
 - **No Vercel AI SDK.** Its Expo guide exists to keep keys server-side, which is the one
   problem a bring-your-own-key app does not have.
 
 ---
 
-## What to build, in order
+## Device acceptance checks
 
-Each task lists where it goes and what "done" means. Most of the groundwork — tables,
-schemas, prompts, repository functions — already exists; check before writing new ones.
+- On Android, enable reminders and change the time. Check the live queue, then
+  force-stop and reopen the app to confirm that its missing reminders are rebuilt.
+- On iOS, check permission, the next expected time, and a notification tap from a cold start.
+- Look up an uncached word with a configured provider. Switch to airplane mode and
+  repeat the lookup in the same query language.
+- Run a full session once with a Dutch voice and once without one. The first audio
+  pass hides the transcript. The latter session identifies itself as text-based.
+- Background or close the app during a stage, reopen it, and verify the same session
+  and saved answers are available. Finish it, then complete an extra practice round.
+- Share JSON and Markdown from Learning data and open each file on the receiving app.
 
-### 1. Dictionary tab (highest value, lowest risk)
-
-Everything except the screen exists.
-
-- Use: `DictionaryEntrySchema` and `dictionaryPrompt` (`src/ai/schemas`, `src/ai/prompts`),
-  `aiStructured` (`src/ai/call.ts`), `addPhrase` and `searchPhrases`
-  (`src/db/repo/phrases.ts`), the `dictionary_entries` table.
-- Replace the placeholder in `src/app/(tabs)/dictionary.tsx`.
-- Cache every lookup in `dictionary_entries` keyed on
-  `(normalized_query, query_lang)`; a cache hit must render instantly and offline.
-- Show article, plural, verb forms, register, example, a `SpeakButton`, and
-  **Add to phrase bank**. Award `XP.DICTIONARY_SAVE` on save.
-- When `confidence` is `low`, set `needs_verification` on the saved phrase and show a
-  "correct me" affordance. Models are confidently wrong about de/het more often than
-  you would like.
-- Below the search, list the whole bank with a `FlashList` and filters.
-- **Done when:** a word looked up once opens instantly in airplane mode.
-
-### 2. Reminders settings screen
-
-`src/notifications/schedule.ts` is complete; there is no UI for it.
-
-- New route `src/app/settings/reminders.tsx`, linked from the You tab.
-- Time picker (default 19:30), enable/disable, streak-rescue toggle.
-- A **Reminder health** card from `checkReminderHealth()`: permission state, pending
-  count, next fire time, last reconcile, and the live-versus-scheduled timezone.
-- A "Reminders not arriving?" sheet covering battery optimisation and the
-  Xiaomi/Samsung/Huawei autostart settings. Android force-stop wipes the schedule with
-  no API to detect it; `healIfCleared()` repairs it, and the card should say so.
-- Call `reconcileReminders(db, 'settings-changed')` after every change.
-- The UI must say **"around 19:30"**, never "at 19:30": we deliberately do not request
-  `USE_EXACT_ALARM`, which Play policy restricts to alarm and calendar apps.
-- **Done when:** changing the time reschedules all 14, and the health card reports
-  honestly after a force-stop.
-
-### 3. Onboarding
-
-`learner_profile` has `sport`, `interests`, `goals` and `onboarded_at`, all unused. The
-tutor prompt and several reminder templates already read `sport` and `interests`, so
-this makes existing features better rather than adding new ones.
-
-- Show once when `onboarded_at` is null; ask which sport, which peer situations matter,
-  preferred session length and reminder time, then request notification permission.
-- Per the spec: personalise without interviewing. Keep it to one screen.
-- **Done when:** sport-flavoured reminder copy appears for a new user.
-
-### 4. Listening stage
-
-- Add `'listening'` back to the `standard` plan in `src/session/plan.ts`.
-- New screen `src/app/session/[id]/listening.tsx`; fix the `listening` entry in
-  `ROUTE_FOR` in `src/app/session/[id]/index.tsx`, which currently points at recall as a
-  placeholder.
-- Use `ListeningExerciseSchema` and `speakDutch` for playback.
-- Follow the spec exactly: first pass audio only with no transcript; ask for the gist;
-  replay; then **two** detail questions one at a time; then up to three difficult
-  chunks; then two lines to shadow.
-- The transcript must genuinely be hidden on the first pass. If it cannot be, say so —
-  never claim it was hidden when it was not.
-- Record `audio_source`. With `'text_only'` the screen must label the activity as
-  text-based, and the model must never be given a field in which to claim it heard
-  anything.
-- **Done when:** a full listening stage runs with no Dutch voice installed and says
-  plainly why there is no audio.
-
-### 5. Topic role-play stage
-
-- Add `'topic_conversation'` to the `standard` plan; new screen reusing the chat shape
-  from `casual.tsx`.
-- Three rounds, which is how the spec already describes it: setup, a small complication
-  ("someone cannot make Saturday and proposes Sunday"), then a replay with fewer hints.
-- Up to two corrections at the end, then a retry.
-
-### 6. Progress tab
-
-Repository functions already exist: `masteryCounts`, `xpHistory`, `challengeHistory`,
-`completedSessionCount`, plus correction counts by category.
-
-- Hand-rolled `react-native-svg` charts only. Do not add a charting library.
-- Mastery bands come from FSRS stability, not a review counter — "words I own" is then a
-  real retention estimate rather than a vanity number.
-- No invented fluency percentages or CEFR levels, ever.
-- Show the self-reported confidence trend. It is currently written to
-  `session_stages.result_json` by the wrap-up and never read.
-
-### 7. Book companion
-
-Tables (`books`, `book_units`, `book_items`) and `BookItemExplanationSchema` exist.
-
-- Add a book, then a unit or page range; paste or type the words you got stuck on.
-- Walk them one at a time: *know it* / *explain it*. Anything kept joins the same
-  review schedule via `addPhrase` with `source: 'book'`.
-- Camera OCR is explicitly deferred — it needs a development build.
-
-### 8. Media suggestions
-
-- `MediaSuggestionsSchema` exists. Generate from phrases and topics already covered.
-- Store `search_query` and open `https://www.youtube.com/results?search_query=...` via
-  `expo-web-browser`. **Never render a model-produced `watch?v=` URL.**
-- Surface as a carousel on Today plus a `/media` route; not a sixth tab.
-
-### 9. Smaller items
-
-- **Data export** — JSON + Markdown via `expo-sharing`; `listBackups`/`backupPath` exist.
-- **Achievements** — table exists; tie to spec milestones (first Day 7 review, week 4
-  complete, 30-day streak, 100 words owned).
-- **Day 7 review flow** — familiar but unrehearsed tasks, compared against the baseline
-  with concrete examples; ask for self-rated confidence; never invent a score.
-- **FTS5 (migration v2)** — gate on
-  `SELECT sqlite_compileoption_used('ENABLE_FTS5')` and keep the LIKE fallback.
-- **Remove template leftovers** — `@expo/ui`, `expo-glass-effect`, `expo-symbols` are
-  unused and add native weight to the Android build.
-- **`daily_activity.active_seconds`** and **`messages.ai_call_id`** are never populated;
-  either wire them up or drop them in a later migration.
+Camera OCR remains deferred. The app uses typed conversation and system speech playback.
 
 ---
 

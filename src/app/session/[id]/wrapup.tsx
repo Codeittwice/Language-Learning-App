@@ -16,9 +16,9 @@ import { aiStructured } from '@/ai/call';
 import { tutorSystemPrompt, wrapUpPrompt } from '@/ai/prompts';
 import { type SessionSummary, SessionSummarySchema } from '@/ai/schemas';
 import { getProfile } from '@/db/repo/profile';
-import { assignChallenge } from '@/db/repo/sessions';
+import { readReviewExamples } from '@/db/repo/progress';
+import { assignChallenge, getStages } from '@/db/repo/sessions';
 import { advanceStage, finishSession, sessionById } from '@/session/engine';
-import { stagesFor } from '@/session/plan';
 import { topicByKey, topicFor, type RotationTopic } from '@/session/rotation';
 import { useTheme } from '@/theme/use-theme';
 import { Button, Chip } from '@/ui/button';
@@ -31,6 +31,7 @@ const STAGE: SessionStage = 'wrap_up';
 
 type SessionFacts = {
   reviewed: string[];
+  meanings: string[];
   missed: string[];
   corrections: string[];
   independent: number;
@@ -52,6 +53,8 @@ export default function WrapUpScreen() {
   const [stageCount, setStageCount] = useState(4);
   const [startedAt] = useState(() => Date.now());
   const [finishing, setFinishing] = useState(false);
+  const [error, setError] = useState('');
+  const [review, setReview] = useState<Awaited<ReturnType<typeof readReviewExamples>> | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -65,13 +68,13 @@ export default function WrapUpScreen() {
 
       const loadedProfile = await getProfile(db);
       const sessionTopic = topicByKey(session.topicKey) ?? topicFor(session.sessionNumber);
-      const stages = stagesFor(session.durationMode);
+      const stages = (await getStages(db, id)).map((stage) => stage.stage);
 
       // Everything the summary needs is already recorded.
-      const reviewRows = await db.getAllAsync<{ dutch: string; status: string }>(
-        `SELECT p.dutch AS dutch, r.status AS status
+      const reviewRows = await db.getAllAsync<{ dutch: string; meaning_en: string; status: string }>(
+        `SELECT p.dutch AS dutch, p.meaning_en, r.status AS status
            FROM phrase_reviews r JOIN phrases p ON p.id = r.phrase_id
-          WHERE r.session_id = ? ORDER BY r.reviewed_at`,
+          WHERE r.session_id = ? AND r.status <> 'not_tested' ORDER BY r.reviewed_at`,
         [id]
       );
       const correctionRows = await db.getAllAsync<{ corrected: string; category: string }>(
@@ -81,13 +84,16 @@ export default function WrapUpScreen() {
 
       const collected: SessionFacts = {
         reviewed: [...new Set(reviewRows.map((row) => row.dutch))],
+        meanings: [...new Set(reviewRows.map((row) => row.meaning_en))],
         missed: [...new Set(reviewRows.filter((r) => r.status === 'missed').map((r) => r.dutch))],
         corrections: correctionRows.map((row) => `${row.category}: ${row.corrected}`),
         independent: reviewRows.filter((row) => row.status === 'independent').length,
         total: reviewRows.length,
       };
 
+      const examples = session.rotationDay === 7 && session.kind === 'scheduled' ? await readReviewExamples(db, id) : null;
       if (cancelled) return;
+      setReview(examples);
       setFacts(collected);
       setStageIndex(Math.max(0, stages.indexOf(STAGE)));
       setStageCount(stages.length);
@@ -131,7 +137,7 @@ export default function WrapUpScreen() {
       } finally {
         if (!cancelled) setLoading(false);
       }
-    })();
+    })().catch(() => { if (!cancelled) setError('Could not open your saved session.'); });
 
     return () => {
       cancelled = true;
@@ -143,23 +149,28 @@ export default function WrapUpScreen() {
     if (!id || finishing) return;
     setFinishing(true);
 
-    const session = await sessionById(db, id);
-    if (!session) return;
-
-    if (summary?.realWorldChallenge) {
-      await assignChallenge(db, id, session.rotationDay, summary.realWorldChallenge);
+    setError('');
+    try {
+      const session = await sessionById(db, id);
+      if (!session) throw new Error('Session unavailable');
+      if (summary?.realWorldChallenge) {
+        await assignChallenge(db, id, session.rotationDay, summary.realWorldChallenge);
+      }
+      await advanceStage(db, session, { stage: STAGE, result: { confidence, weeklyReview: Boolean(review) } });
+      await finishSession(db, session);
+      router.replace(`/session/${id}/complete`);
+    } catch {
+      setError('Could not finish saving the session. Try again.');
+      setFinishing(false);
     }
-    await advanceStage(db, session, { stage: STAGE, result: { confidence } });
-    await finishSession(db, session);
-    router.replace(`/session/${id}/complete`);
-  }, [confidence, db, finishing, id, router, summary]);
+  }, [confidence, db, finishing, id, review, router, summary]);
 
   if (loading || !summary || !facts) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-        <ActivityIndicator color={theme.colors.primary} />
+        {error ? <Button title="Back to Today" onPress={() => router.replace('/')} /> : <ActivityIndicator color={theme.colors.primary} />}
         <Text variant="small" tone="muted">
-          Putting your session together…
+          {error || 'Putting your session together…'}
         </Text>
       </View>
     );
@@ -178,6 +189,7 @@ export default function WrapUpScreen() {
 
       <ScrollView contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.lg }}>
         <Animated.View entering={FadeIn} style={{ gap: theme.space.lg }}>
+          {review && <WeeklyReview examples={review} />}
           <Card>
             <Text variant="caption" tone="faint">
               BEFORE YOU GO
@@ -279,6 +291,7 @@ export default function WrapUpScreen() {
             </Row>
           </Card>
 
+          {error ? <Text tone="danger" accessibilityRole="alert">{error}</Text> : null}
           <Button title="Finish session" loading={finishing} onPress={() => void finish()} />
         </Animated.View>
       </ScrollView>
@@ -286,14 +299,32 @@ export default function WrapUpScreen() {
   );
 }
 
+function WeeklyReview({ examples }: { examples: Awaited<ReturnType<typeof readReviewExamples>> }) {
+  const labels = { recall: 'Recall', gist: 'Listening gist', writing: 'Writing', roleplay: 'Role-play' } as const;
+  return (
+    <Card>
+      <Text variant="h2">Day 7 · Mixed review</Text>
+      <Text tone="muted">Compare examples from your first session and today. Where did you find words more easily? What would you try again?</Text>
+      {(Object.keys(labels) as (keyof typeof labels)[]).map((key) => (
+        <View key={key}>
+          <Text variant="bodyStrong">{labels[key]}</Text>
+          <Text variant="small" tone="muted">Day 1 · {examples.earlier?.[key] ?? 'No saved example'}</Text>
+          <Text variant="small">Today · {examples.current?.[key] ?? 'No saved example'}</Text>
+        </View>
+      ))}
+    </Card>
+  );
+}
+
 /** The whole summary, built from the database when the model is unavailable. */
 function localSummary(facts: SessionFacts, topic: RotationTopic): SessionSummary {
   const prompts: string[] = [];
-  const first = facts.reviewed[0];
-  const second = facts.missed[0] ?? facts.reviewed[1];
+  const first = facts.meanings[0];
+  const second = facts.meanings[1];
   if (first) prompts.push(`How do you say "${first}" without looking?`);
   if (second && second !== first) prompts.push(`And "${second}"?`);
-  if (prompts.length === 0) prompts.push('What is one Dutch phrase you used today?');
+  if (prompts.length < 2) prompts.push('What is one Dutch phrase you could use in a conversation like today’s?');
+  if (prompts.length < 2) prompts.push('How would you ask a follow-up question in Dutch?');
 
   return {
     retrievalPrompts: prompts.slice(0, 2),

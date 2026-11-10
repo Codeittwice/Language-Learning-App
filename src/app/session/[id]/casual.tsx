@@ -24,16 +24,15 @@ import { aiStream } from '@/ai/call';
 import { AiError } from '@/ai/errors';
 import { friendModePrompt, phraseContext, tutorSystemPrompt } from '@/ai/prompts';
 import type { ChatMessage } from '@/ai/types';
-import { newId } from '@/db';
 import { selectForRecall } from '@/db/repo/phrases';
 import { currentDayKey, getProfile } from '@/db/repo/profile';
-import { saveCheckpoint } from '@/db/repo/sessions';
+import { appendTurn, readConversation } from '@/db/repo/messages';
+import { getStages, saveCheckpoint } from '@/db/repo/sessions';
 import { awardXp } from '@/gamification/xp';
 import { advanceStage, sessionById } from '@/session/engine';
-import { roundsForStage, stagesFor } from '@/session/plan';
+import { roundsForStage } from '@/session/plan';
 import { topicByKey, topicFor, type RotationTopic } from '@/session/rotation';
 import { speakDutch, stopSpeaking } from '@/speech/tts';
-import { nowIso } from '@/time/day';
 import { useTheme } from '@/theme/use-theme';
 import { Button, Chip, tapFeedback } from '@/ui/button';
 import { SessionHeader } from '@/ui/session-header';
@@ -71,7 +70,7 @@ export default function CasualScreen() {
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
-  const seqRef = useRef(0);
+  const finishingRef = useRef(false);
 
   const userTurns = turns.filter((turn) => turn.role === 'user').length;
 
@@ -83,16 +82,18 @@ export default function CasualScreen() {
     (async () => {
       if (!id) return;
       const session = await sessionById(db, id);
-      if (!session || cancelled) return;
+      if (cancelled) return;
+      if (!session) throw new Error('Session unavailable');
 
-      const [loadedProfile, phrases] = await Promise.all([
+      const [loadedProfile, phrases, stageRows, history] = await Promise.all([
         getProfile(db),
         selectForRecall(db, { limit: 8, now: new Date() }),
+        getStages(db, id), readConversation(db, id, 'casual'),
       ]);
       if (cancelled) return;
 
       const sessionTopic = topicByKey(session.topicKey) ?? topicFor(session.sessionNumber);
-      const stages = stagesFor(session.durationMode);
+      const stages = stageRows.map((stage) => stage.stage);
       const rounds = roundsForStage(session.durationMode, STAGE);
 
       const prompt = [
@@ -106,12 +107,13 @@ export default function CasualScreen() {
         .join('\n');
 
       setTopic(sessionTopic);
+      setTurns(history);
       setSystemPrompt(prompt);
       setStageIndex(Math.max(0, stages.indexOf(STAGE)));
       setStageCount(stages.length);
       setTargetTurns(rounds.reduce((sum, round) => sum + round.items, 0) || 6);
       setLoading(false);
-    })();
+    })().catch(() => { if (!cancelled) setError('Could not open the saved conversation.'); });
 
     return () => {
       cancelled = true;
@@ -120,61 +122,33 @@ export default function CasualScreen() {
     };
   }, [db, id]);
 
-  const persist = useCallback(
-    async (role: 'user' | 'assistant', content: string) => {
-      if (!id) return;
-      seqRef.current += 1;
-      await db.runAsync(
-        `INSERT INTO messages (id, session_id, thread, stage, role, content, lang, input_mode, seq, created_at)
-         VALUES (?, ?, 'casual', ?, ?, ?, 'nl', ?, ?, ?)`,
-        [
-          newId(),
-          id,
-          STAGE,
-          role,
-          content,
-          role === 'user' ? 'typed' : null,
-          seqRef.current,
-          nowIso(),
-        ]
-      );
-    },
-    [db, id]
-  );
-
   /** Send a turn and stream the reply. */
   const send = useCallback(
     async (content: string, { persistUser = true }: { persistUser?: boolean } = {}) => {
-      if (!id || streaming || !systemPrompt) return;
+      if (!id || abortRef.current || finishingRef.current || !systemPrompt) return;
       const trimmed = content.trim();
       if (!trimmed) return;
 
       setError(null);
-      setDraft('');
       setStreaming(true);
       setPartial('');
 
-      const userTurn: Turn = { id: newId(), role: 'user', text: trimmed };
-      const history = persistUser ? [...turns, userTurn] : turns;
-      if (persistUser) {
-        setTurns(history);
-        await persist('user', trimmed);
-      }
-
       const controller = new AbortController();
       abortRef.current = controller;
-
-      const messages: ChatMessage[] = [
-        { role: 'system', content: systemPrompt },
-        ...history.slice(-CONTEXT_WINDOW).map((turn) => ({
-          role: turn.role,
-          content: turn.text,
-        })),
-      ];
-      if (!persistUser) messages.push({ role: 'user', content: trimmed });
-
       let assembled = '';
+      let callId: number | null = null;
       try {
+        const history = persistUser
+          ? [...turns, await appendTurn(db, id, 'casual', STAGE, 'user', trimmed)] : turns;
+        if (persistUser) {
+          setTurns(history);
+          setDraft('');
+        }
+        const messages: ChatMessage[] = [
+          { role: 'system', content: systemPrompt },
+          ...history.slice(-CONTEXT_WINDOW).map((turn) => ({ role: turn.role, content: turn.text })),
+        ];
+        if (!persistUser) messages.push({ role: 'user', content: trimmed });
         for await (const event of aiStream(db, {
           purpose: 'casual.chat',
           sessionId: id,
@@ -182,6 +156,7 @@ export default function CasualScreen() {
           temperature: 0.8,
           maxTokens: 300,
           signal: controller.signal,
+          onCallLogged: (logged) => { callId = logged; },
           messages,
         })) {
           if (event.type === 'delta') {
@@ -192,23 +167,21 @@ export default function CasualScreen() {
           }
         }
 
-        if (assembled.trim()) {
-          setTurns((previous) => [
-            ...previous,
-            { id: newId(), role: 'assistant', text: assembled.trim() },
-          ]);
-          await persist('assistant', assembled.trim());
+        if (!controller.signal.aborted && assembled.trim()) {
+          const saved = await appendTurn(db, id, 'casual', STAGE, 'assistant', assembled.trim(), callId);
+          setTurns((previous) => [...previous, saved]);
         }
       } catch (caught) {
-        setError(
-          caught instanceof AiError ? caught.userMessage : 'Could not reach the AI just now.'
+        if (!controller.signal.aborted) setError(
+          caught instanceof AiError ? caught.userMessage : 'Could not save or load this reply. Try again.'
         );
       } finally {
         setStreaming(false);
         setPartial('');
+        if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [db, id, persist, streaming, systemPrompt, turns]
+    [db, id, systemPrompt, turns]
   );
 
   // Open the conversation once everything is loaded.
@@ -218,22 +191,26 @@ export default function CasualScreen() {
   // it to exactly one opening turn even under strict-mode double invocation.
   const openedRef = useRef(false);
   useEffect(() => {
-    if (loading || !topic || openedRef.current) return;
-    openedRef.current = true;
-    const timer = setTimeout(() => void send('Begin het gesprek.', { persistUser: false }), 0);
+    if (loading || !topic || openedRef.current || turns.length) return;
+    const timer = setTimeout(() => {
+      openedRef.current = true;
+      void send('Begin het gesprek.', { persistUser: false });
+    }, 0);
     return () => clearTimeout(timer);
     // `send` is recreated on every turn; opening must not re-run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, topic]);
 
-  const finish = useCallback(async () => {
-    if (!id) return;
+  const finish = useCallback(async (skipped = false) => {
+    if (!id || finishingRef.current) return;
+    finishingRef.current = true;
+    try {
     const session = await sessionById(db, id);
-    if (!session) return;
+    if (!session) throw new Error('Session unavailable');
 
     abortRef.current?.abort();
     const dayKey = await currentDayKey(db);
-    if (userTurns > 0) {
+    if (!skipped && userTurns > 0) {
       await awardXp(db, dayKey, {
         kind: 'ROUND_COMPLETE',
         sessionId: id,
@@ -245,15 +222,22 @@ export default function CasualScreen() {
     await saveCheckpoint(db, id, STAGE, null, { turns: userTurns });
     const nextStage = await advanceStage(db, session, {
       stage: STAGE,
+      skipped,
       result: { turns: userTurns },
     });
     router.replace(nextStage ? `/session/${id}` : `/session/${id}/complete`);
+    } catch {
+      setError('Could not finish saving the conversation. Try again.');
+    } finally {
+      finishingRef.current = false;
+    }
   }, [db, id, router, userTurns]);
 
   if (loading || !topic) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-        <ActivityIndicator color={theme.colors.primary} />
+        {error ? <Button title="Back to Today" onPress={() => router.replace('/')} /> : <ActivityIndicator color={theme.colors.primary} />}
+        {error ? <Text tone="danger">{error}</Text> : null}
       </View>
     );
   }
@@ -272,7 +256,7 @@ export default function CasualScreen() {
         progress={Math.min(1, userTurns / targetTurns)}
         startedAt={startedAt}
         onClose={() => router.replace('/')}
-        onSkip={() => void finish()}
+        onSkip={() => void finish(true)}
       />
 
       <ScrollView

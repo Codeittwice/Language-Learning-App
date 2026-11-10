@@ -33,6 +33,7 @@ export type AiCallOptions = {
   signal?: AbortSignal;
   sessionId?: string;
   stage?: string;
+  onCallLogged?: (id: number) => void;
 };
 
 /**
@@ -42,13 +43,15 @@ export type AiCallOptions = {
 async function record(
   db: SQLiteDatabase,
   meta: CallMeta,
-  usage: Usage
+  usage: Usage,
+  onCallLogged?: (id: number) => void
 ): Promise<void> {
   try {
     const model = await getCachedModel(db, meta.provider, meta.model);
     const cost = costOf(usage, model);
     const dayKey = await currentDayKey(db);
-    await logAiCall(db, meta, cost, dayKey);
+    const id = await logAiCall(db, meta, cost, dayKey);
+    onCallLogged?.(id);
   } catch (error) {
     console.warn('[ai] could not record call in the ledger', redactUnknown(error));
   }
@@ -98,7 +101,8 @@ async function run<T>(
         ok: true,
         retries,
       },
-      result.usage
+      result.usage,
+      options.onCallLogged
     );
     return result.value;
   } catch (error) {
@@ -192,7 +196,8 @@ export async function* aiStream(
     await record(
       db,
       { ...base, usage, latencyMs: Date.now() - startedAt, ok: true, retries: 0 },
-      usage
+      usage,
+      options.onCallLogged
     );
   } catch (error) {
     const aiError =

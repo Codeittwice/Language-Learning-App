@@ -16,6 +16,9 @@ export default function SettingsLayout() {
       }}
     >
       <Stack.Screen name="ai" options={{ title: 'AI provider' }} />
+      <Stack.Screen name="reminders" options={{ title: 'Reminders' }} />
+      <Stack.Screen name="data" options={{ title: 'Learning data' }} />
+      <Stack.Screen name="profile" options={{ title: 'Practice preferences' }} />
     </Stack>
   );
 }

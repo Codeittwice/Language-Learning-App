@@ -10,8 +10,8 @@
  */
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { SQLiteProvider } from 'expo-sqlite';
-import { Suspense, useEffect } from 'react';
+import { SQLiteProvider, type SQLiteDatabase } from 'expo-sqlite';
+import { Suspense, useEffect, useSyncExternalStore } from 'react';
 import { ActivityIndicator, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -19,10 +19,31 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import '@/notifications';
 import { DATABASE_NAME } from '@/db';
 import { migrate } from '@/db/migrations';
-import { Bootstrap } from '@/app/bootstrap';
+import { importSeedPhrases } from '@/db/repo/phrases';
+import { getSoundEnabled, getStringSetting, SETTING_KEYS, setSetting } from '@/db/repo/settings';
+import { setSoundEnabled } from '@/audio/sfx';
+import { Bootstrap } from '@/notifications/bootstrap';
 import { themeFor } from '@/theme/tokens';
+import { nowIso } from '@/time/day';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
+
+// SQLite's web worker only exists in the browser. Render the same loading shell
+// on the server and during hydration before attempting to open the local database.
+const subscribeToClient = () => () => undefined;
+const clientSnapshot = () => true;
+const serverSnapshot = () => false;
+
+async function prepareDatabase(db: SQLiteDatabase) {
+  await migrate(db);
+  if (!(await getStringSetting(db, SETTING_KEYS.seedImportedAt))) {
+    await importSeedPhrases(db);
+    await setSetting(db, SETTING_KEYS.seedImportedAt, nowIso());
+  }
+  // Mirror the stored sound preference into the audio module once, here, so that
+  // every later `play()` is a synchronous flag check rather than a database read.
+  setSoundEnabled(await getSoundEnabled(db));
+}
 
 function MigrationFallback() {
   const scheme = useColorScheme();
@@ -44,6 +65,7 @@ function MigrationFallback() {
 export default function RootLayout() {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
+  const client = useSyncExternalStore(subscribeToClient, clientSnapshot, serverSnapshot);
 
   useEffect(() => {
     // The splash stays up until the first frame after migrations have settled.
@@ -55,7 +77,8 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ThemeProvider value={isDark ? DarkTheme : DefaultTheme}>
           <Suspense fallback={<MigrationFallback />}>
-            <SQLiteProvider databaseName={DATABASE_NAME} onInit={migrate} useSuspense>
+            {client ? (
+            <SQLiteProvider databaseName={DATABASE_NAME} onInit={prepareDatabase} useSuspense>
               <Bootstrap />
               <Stack screenOptions={{ headerShown: false }}>
                 <Stack.Screen name="(tabs)" />
@@ -65,6 +88,7 @@ export default function RootLayout() {
                 />
               </Stack>
             </SQLiteProvider>
+            ) : <MigrationFallback />}
           </Suspense>
         </ThemeProvider>
       </SafeAreaProvider>
