@@ -15,6 +15,9 @@ import { tapFeedback } from '@/ui/button';
 import { Card, Row, ScreenScroll, Separator } from '@/ui/surface';
 import { Text } from '@/ui/text';
 
+// A literal here would be a new array every render, re-running the subscribe effect.
+const YOU_EVENTS = ['settings:changed', 'ai:changed'] as const;
+
 export default function YouScreen() {
   const theme = useTheme();
 
@@ -24,7 +27,7 @@ export default function YouScreen() {
       const hasKey = config.provider ? (await getKey(config.provider)) !== null : false;
       return { config, profile, hasKey };
     },
-    { events: ['settings:changed', 'ai:changed'] }
+    { events: YOU_EVENTS }
   );
 
   const config = state.data?.config;

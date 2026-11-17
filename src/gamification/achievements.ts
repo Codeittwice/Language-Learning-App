@@ -28,11 +28,32 @@ export async function refreshAchievements(db: SQLiteDatabase) {
     words_100: mastery.mastered >= 100,
   };
   const now = nowIso();
-  for (const key of Object.keys(ACHIEVEMENTS) as (keyof typeof ACHIEVEMENTS)[]) {
-    if (reached[key]) await db.runAsync(
-      'INSERT INTO achievements (key, unlocked_at) VALUES (?, ?) ON CONFLICT(key) DO NOTHING', [key, now]
+  const unlocked = (Object.keys(ACHIEVEMENTS) as (keyof typeof ACHIEVEMENTS)[]).filter(
+    (key) => reached[key]
+  );
+
+  // One statement rather than one per achievement. This used to be four sequential
+  // awaited INSERTs on a path that a read was calling.
+  if (unlocked.length > 0) {
+    await db.runAsync(
+      `INSERT INTO achievements (key, unlocked_at)
+       VALUES ${unlocked.map(() => '(?, ?)').join(', ')}
+       ON CONFLICT(key) DO NOTHING`,
+      unlocked.flatMap((key) => [key, now])
     );
   }
+
+  return readAchievements(db);
+}
+
+/**
+ * What has been unlocked, computing and writing nothing.
+ *
+ * `refreshAchievements` writes, so it does not belong behind a screen read. It already
+ * runs where unlocks can actually happen -- `finishSession` in `src/session/engine.ts`
+ * -- and the Progress screen only needs to display the result.
+ */
+export async function readAchievements(db: SQLiteDatabase) {
   return db.getAllAsync<{ key: keyof typeof ACHIEVEMENTS; unlocked_at: string }>(
     'SELECT key, unlocked_at FROM achievements ORDER BY unlocked_at, key'
   );

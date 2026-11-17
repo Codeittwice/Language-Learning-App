@@ -34,7 +34,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import { toDb } from '@/db';
 import { emit } from '@/db/events';
 import { type LevelState, levelStateFromXp } from '@/gamification/levels';
-import { recomputeStreak, type StreakState } from '@/gamification/streak';
+import { readStreak, recomputeStreak, type StreakState } from '@/gamification/streak';
 import { getProfile } from '@/db/repo/profile';
 import { type DayKey, learningDayRangeUtc, nowIso } from '@/time/day';
 
@@ -261,7 +261,13 @@ export async function awardXp(
   const levelBefore = levelStateFromXp(lifetimeBefore);
   const level = levelStateFromXp(lifetimeBefore + awarded);
 
-  const streak = await recomputeStreak(db, dayKey);
+  // The streak can only move when a day's `goal_met` flips. Every other award gets the
+  // cached read: `recomputeStreak` scans every met day and rewrites the cache row, and
+  // it was running on all of them -- twice per recall card once a combo bonus landed.
+  const justMetGoal = goalMet && !wasMet;
+  const streak = justMetGoal
+    ? await recomputeStreak(db, dayKey)
+    : await readStreak(db, dayKey);
   emit('gamification:changed');
 
   return {
@@ -269,7 +275,7 @@ export async function awardXp(
     todayXp,
     goalXp,
     goalMet,
-    justMetGoal: goalMet && !wasMet,
+    justMetGoal,
     streak,
     level,
     justLeveled: level.level > levelBefore.level,

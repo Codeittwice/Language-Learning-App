@@ -54,6 +54,19 @@ export const MIGRATIONS: readonly Migration[] = [
       );
     },
   },
+  {
+    version: 4,
+    label: 'index the met-days scan the streak recompute runs',
+    async up(db) {
+      // recomputeStreak reads every day whose goal was met, and ran inside every
+      // single XP award. A partial index matches that query exactly and stays small:
+      // it holds only the met days, which is also all the streak ever looks at.
+      await db.execAsync(
+        `CREATE INDEX IF NOT EXISTS ix_daily_goal_met
+           ON daily_activity(day_key) WHERE goal_met = 1`
+      );
+    },
+  },
 ];
 
 export const LATEST_VERSION = MIGRATIONS.reduce((max, m) => Math.max(max, m.version), 0);

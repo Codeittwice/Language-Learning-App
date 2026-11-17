@@ -30,12 +30,15 @@ import { Card, Row, ScreenScroll, Separator } from '@/ui/surface';
 import { Text } from '@/ui/text';
 
 const VALIDATE_DEBOUNCE_MS = 600;
+// Module constants: a literal passed to useDbQuery is a new array every render.
+const CONFIG_EVENTS = ['settings:changed'] as const;
+const MODEL_EVENTS = ['ai:changed'] as const;
 
 export default function AiSettingsScreen() {
   const db = useSQLiteContext();
   const theme = useTheme();
 
-  const config = useDbQuery((database) => readAiConfig(database), { events: ['settings:changed'] });
+  const config = useDbQuery((database) => readAiConfig(database), { events: CONFIG_EVENTS });
   const provider = config.data?.provider ?? null;
 
   return (
@@ -294,7 +297,7 @@ function ModelSection({
 
   const models = useDbQuery(
     async (database) => sortModels(providerId, await getCachedModels(database, providerId)),
-    { events: ['ai:changed'] }
+    { events: MODEL_EVENTS }
   );
 
   const all = models.data ?? [];

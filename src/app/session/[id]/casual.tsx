@@ -9,7 +9,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -45,6 +45,8 @@ const STAGE: SessionStage = 'casual_conversation';
 
 /** Rolling window. The whole transcript is never sent -- cost grows, quality does not. */
 const CONTEXT_WINDOW = 12;
+/** How often a streaming reply repaints. ~15 fps is smooth and costs a fifteenth. */
+const PARTIAL_PAINT_MS = 66;
 
 type Turn = { id: string; role: 'user' | 'assistant'; text: string };
 
@@ -137,6 +139,7 @@ export default function CasualScreen() {
       abortRef.current = controller;
       let assembled = '';
       let callId: number | null = null;
+      let lastPaintedAt = 0;
       try {
         const history = persistUser
           ? [...turns, await appendTurn(db, id, 'casual', STAGE, 'user', trimmed)] : turns;
@@ -161,7 +164,14 @@ export default function CasualScreen() {
         })) {
           if (event.type === 'delta') {
             assembled += event.text;
-            setPartial(assembled);
+            // Coalesce to ~15 fps. A setState per token re-rendered the whole
+            // transcript for every few characters, which is most of what made a
+            // streamed reply feel heavy. The final text is always flushed below.
+            const now = Date.now();
+            if (now - lastPaintedAt >= PARTIAL_PAINT_MS) {
+              lastPaintedAt = now;
+              setPartial(assembled);
+            }
           } else if (event.type === 'done') {
             assembled = event.text || assembled;
           }
@@ -242,7 +252,7 @@ export default function CasualScreen() {
     );
   }
 
-  const lastAssistant = [...turns].reverse().find((turn) => turn.role === 'assistant');
+  const lastAssistant = turns.findLast((turn) => turn.role === 'assistant');
 
   return (
     <KeyboardAvoidingView
@@ -262,7 +272,9 @@ export default function CasualScreen() {
       <ScrollView
         ref={scrollRef}
         contentContainerStyle={{ padding: theme.space.lg, gap: theme.space.md }}
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+        // Not animated while a reply streams in: an animated scroll per repaint
+        // queues dozens of competing animations.
+        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: !streaming })}
         keyboardShouldPersistTaps="handled"
       >
         {turns.map((turn) => (
@@ -376,7 +388,12 @@ export default function CasualScreen() {
   );
 }
 
-function Bubble({
+/**
+ * Memoised deliberately: the transcript re-renders whenever a reply is streaming, and
+ * every bubble builds a twelve-property style object and mounts a `SpeakButton`.
+ * Only the pending bubble's text actually changes mid-stream.
+ */
+const Bubble = memo(function Bubble({
   role,
   text,
   pending = false,
@@ -415,4 +432,4 @@ function Bubble({
       ) : null}
     </Animated.View>
   );
-}
+});

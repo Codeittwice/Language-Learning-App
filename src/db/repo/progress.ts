@@ -5,7 +5,7 @@ import { parseJsonColumn } from '@/db';
 import { masteryCounts } from '@/db/repo/phrases';
 import { currentDayKey } from '@/db/repo/profile';
 import { challengeHistory, completedSessionCount } from '@/db/repo/sessions';
-import { refreshAchievements } from '@/gamification/achievements';
+import { readAchievements } from '@/gamification/achievements';
 import { readStreak } from '@/gamification/streak';
 import { getDailyProgress, readLevel, xpHistory } from '@/gamification/xp';
 import { addDays, dayKeysBetween } from '@/time/day';
@@ -28,7 +28,7 @@ export async function readProgress(db: SQLiteDatabase) {
       'SELECT category, COUNT(*) AS count FROM corrections WHERE is_required = 1 GROUP BY category ORDER BY count DESC, category'
     ),
     challengeHistory(db, 8),
-    refreshAchievements(db),
+    readAchievements(db),
     db.getAllAsync<{ status: RecallStatus; count: number }>(
       'SELECT status, COUNT(*) AS count FROM phrase_reviews GROUP BY status'
     ),

@@ -20,6 +20,12 @@ import { Text } from '@/ui/text';
 const LANGUAGES = { nl: 'Dutch', en: 'English', bg: 'Bulgarian' } satisfies Record<QueryLanguage, string>;
 const FILTERS = ['All', 'New', 'Tricky', 'Check details'] as const;
 const BANK_EVENTS = ['phrases:changed'] as const;
+/**
+ * The bank read used to be unlimited (`LIMIT -1`), and every row costs two
+ * `JSON.parse` calls. A bank of a few hundred phrases is already more than anyone
+ * scrolls, and the filter chips narrow it further.
+ */
+const BANK_LIMIT = 200;
 
 export default function DictionaryScreen() {
   const theme = useTheme();
@@ -35,7 +41,7 @@ export default function DictionaryScreen() {
   // SQLite LIKE folds ASCII case only. Bulgarian search uses Unicode case folding here.
   const cyrillic = /\p{Script=Cyrillic}/u.test(needle);
   const bankQuery = cyrillic ? '' : needle;
-  const bank = useDbQuery((database) => searchPhrases(database, bankQuery, null), {
+  const bank = useDbQuery((database) => searchPhrases(database, bankQuery, BANK_LIMIT), {
     events: BANK_EVENTS, queryKey: bankQuery,
   });
   const phrases = (bank.data ?? []).filter((phrase) => {

@@ -11,6 +11,13 @@ import { type SQLiteDatabase, useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { type DbEvent, onAny } from '@/db/events';
+import {
+  gateOnBlur,
+  gateOnEvent,
+  gateOnFocus,
+  type GateState,
+  initialGate,
+} from '@/hooks/query-gate';
 
 export type DbQueryState<T> = {
   data: T | undefined;
@@ -47,6 +54,9 @@ export function useDbQuery<T>(
 
   const mountedRef = useRef(true);
   const latest = useRef(0);
+
+  /** Focus gating; the decisions live in `query-gate.ts` so they can be tested. */
+  const gateRef = useRef<GateState>(initialGate);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -76,13 +86,20 @@ export function useDbQuery<T>(
   useEffect(() => {
     if (!events?.length) return;
     return onAny(events, () => {
-      void execute();
+      const decision = gateOnEvent(gateRef.current);
+      gateRef.current = decision.state;
+      if (decision.read) void execute();
     });
   }, [events, execute]);
 
   useFocusEffect(
     useCallback(() => {
-      if (refreshOnFocus) void execute();
+      const decision = gateOnFocus(gateRef.current, refreshOnFocus);
+      gateRef.current = decision.state;
+      if (decision.read) void execute();
+      return () => {
+        gateRef.current = gateOnBlur(gateRef.current);
+      };
     }, [execute, refreshOnFocus])
   );
 

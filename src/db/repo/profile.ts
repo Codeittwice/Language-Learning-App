@@ -80,10 +80,29 @@ export async function ensureProfile(db: SQLiteDatabase): Promise<LearnerProfile>
      ON CONFLICT(id) DO NOTHING`,
     [deviceTimezone(), now, now]
   );
+  cache.delete(db);
   return getProfile(db);
 }
 
+/**
+ * The profile, cached per connection.
+ *
+ * One row that only settings can change, read constantly: `currentDayKey` wraps it, so
+ * it is hit five or more times building the Today screen and three or four times per
+ * awarded point. Keyed by the database handle through a `WeakMap`, so a test's
+ * throwaway connection cannot see another's row, and dropped by every writer below.
+ */
+const cache = new WeakMap<SQLiteDatabase, LearnerProfile>();
+
+/** Drop the cached profile. Exported for anything that writes the row directly. */
+export function invalidateProfileCache(db: SQLiteDatabase): void {
+  cache.delete(db);
+}
+
 export async function getProfile(db: SQLiteDatabase): Promise<LearnerProfile> {
+  const cached = cache.get(db);
+  if (cached) return cached;
+
   const row = await db.getFirstAsync<ProfileRow>(
     `SELECT native_language, explanation_language, target_variety, default_register,
             sport, interests, goals, default_duration_mode, day_start_hour, timezone,
@@ -110,7 +129,12 @@ export async function getProfile(db: SQLiteDatabase): Promise<LearnerProfile> {
       onboardedAt: null,
     };
   }
-  return toProfile(row);
+
+  // The fallback above is deliberately not cached: once ensureProfile has written the
+  // row, the next read should find it rather than keep serving defaults.
+  const profile = toProfile(row);
+  cache.set(db, profile);
+  return profile;
 }
 
 const COLUMN_OF: Record<keyof LearnerProfile, string> = {
@@ -152,6 +176,7 @@ export async function updateProfile(
   args.push(nowIso());
 
   await db.runAsync(`UPDATE learner_profile SET ${assignments.join(', ')} WHERE id = 1`, args);
+  cache.delete(db);
   emit('settings:changed');
 }
 
